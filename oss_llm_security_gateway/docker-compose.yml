@@ -1,0 +1,37 @@
+services:
+  security-gateway:
+    build:
+      context: ./security-gateway
+    environment:
+      TIKA_URL: http://tika:9998
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
+      FAIL_CLOSED: "true"
+      MAX_TEXT_CHARS: "500000"
+      MAX_FILE_BYTES: "26214400"
+      POLICY_FILE: /app/policy.yaml
+      # If LiteLLM is another Docker service on the same network, use http://litellm:4000
+      # If LiteLLM is on the Windows host / another compose published on port 4000, use host.docker.internal.
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://host.docker.internal:4000}
+      UPSTREAM_TIMEOUT: "600"
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      - tika
+      - clamav
+    networks:
+      - llm-sec
+
+  tika:
+    image: apache/tika:latest-full
+    networks:
+      - llm-sec
+
+  clamav:
+    image: clamav/clamav:stable
+    networks:
+      - llm-sec
+
+networks:
+  llm-sec:
+    driver: bridge
