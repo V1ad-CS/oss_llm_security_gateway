@@ -8,7 +8,7 @@ Security Gateway не отправляет проверяемые данные �
 
 ## Что проверяется
 
-- PII через Presidio custom recognizers: российский паспорт, СНИЛС, ИНН, телефон, email, банковская карта; для ИНН/СНИЛС/карт добавлена checksum-проверка.
+- PII через Presidio custom recognizers: российский паспорт (только рядом со словом «паспорт»/«серия»), СНИЛС, ИНН, телефон, email, банковская карта; для ИНН/СНИЛС/карт добавлена checksum-проверка.
 - ФИО через Natasha (опционально включается в policy.yaml).
 - API keys / tokens / credentials через Gitleaks.
 - Явные признаки коммерческой тайны через policy.yaml.
@@ -18,16 +18,30 @@ Security Gateway не отправляет проверяемые данные �
 
 ## Запуск
 
-Из каталога, где находится docker-compose.security.yml:
+Из корня репозитория (там, где лежит docker-compose.security.yml):
 
+    cp .env.example .env        # необязательно: LITELLM_BASE_URL и др.
     docker compose -f docker-compose.security.yml up -d --build
 
 Проверка:
 
     curl http://localhost:8080/healthz
 
-Если порт gateway не опубликован наружу, проверяйте из контейнерной сети
-или добавьте временно `ports: ["8080:8080"]` в security-gateway.
+Gateway опубликован только на 127.0.0.1:8080 (порт меняется через `GATEWAY_PORT` в `.env`).
+
+При первом запуске ClamAV несколько минут скачивает базы сигнатур; пока контейнер
+`clamav` не стал `healthy`, проверка файлов возвращает BLOCK
+(`SECURITY_SERVICE_UNAVAILABLE`, fail-closed). Чат это не затрагивает.
+
+policy.yaml монтируется в контейнер: после правки достаточно
+
+    docker compose -f docker-compose.security.yml restart security-gateway
+
+Тесты:
+
+    cd security-gateway
+    pip install -r requirements-dev.txt
+    python -m pytest
 
 Текст:
 
@@ -91,9 +105,9 @@ Gitleaks v8.30.1 repository lives at `github.com/gitleaks/gitleaks`, but its Go 
 
 После обновления пересоберите:
 
-    docker compose down
-    docker compose build --no-cache
-    docker compose up
+    docker compose -f docker-compose.security.yml down
+    docker compose -f docker-compose.security.yml build --no-cache
+    docker compose -f docker-compose.security.yml up -d
 
 
 ## v4: использовать как настоящий gateway

@@ -1,0 +1,54 @@
+services:
+  security-gateway:
+    build:
+      context: ./security-gateway
+    restart: unless-stopped
+    environment:
+      TIKA_URL: http://tika:9998
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
+      FAIL_CLOSED: ${FAIL_CLOSED:-true}
+      MAX_TEXT_CHARS: ${MAX_TEXT_CHARS:-500000}
+      MAX_FILE_BYTES: ${MAX_FILE_BYTES:-26214400}
+      POLICY_FILE: /app/policy.yaml
+      # If LiteLLM is another Docker service on the same network, use http://litellm:4000
+      # If LiteLLM is on the Docker host / another compose published on port 4000, use host.docker.internal.
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://host.docker.internal:4000}
+      UPSTREAM_TIMEOUT: ${UPSTREAM_TIMEOUT:-600}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    # Docker Desktop resolves host.docker.internal itself; Linux Docker Engine needs this mapping.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Edit policy.yaml and run `docker compose -f docker-compose.security.yml restart security-gateway`.
+    volumes:
+      - ./security-gateway/policy.yaml:/app/policy.yaml:ro
+    ports:
+      - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"
+    depends_on:
+      - tika
+      - clamav
+    networks:
+      - llm-sec
+
+  tika:
+    # Pinned: `latest-full` moved to Tika 4.x, which renamed the /detect/stream endpoint.
+    image: apache/tika:3.3.1.0-full
+    restart: unless-stopped
+    networks:
+      - llm-sec
+
+  clamav:
+    image: clamav/clamav:stable
+    restart: unless-stopped
+    volumes:
+      - clamav-db:/var/lib/clamav
+    networks:
+      - llm-sec
+
+volumes:
+  # Keeps downloaded ClamAV signatures between restarts (first start downloads ~300 MB).
+  clamav-db:
+
+networks:
+  llm-sec:
+    driver: bridge

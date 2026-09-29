@@ -14,7 +14,7 @@ block_person_names: false
 
 pii_score_threshold: 0.80
 
-# Явные грифы/метки документа.
+# Явные грифы/метки документа (сравнение без учёта регистра).
 blocked_markings:
   - "Коммерческая тайна"
   - "Конфиденциально"
@@ -22,6 +22,8 @@ blocked_markings:
   - "Для служебного пользования"
   - "Internal Only"
   - "Confidential"
+  - "Strictly Confidential"
+  - "Commercial Secret"
 
 # ВАЖНО: заполните своими внутренними названиями проектов/клиентов/систем.
 protected_terms:
@@ -45,8 +47,16 @@ commercial_terms:
   - "коммерческое предложение"
   - "исходный код"
   - "внутренняя архитектура"
-  - "roadmap"
   - "план релиза"
-  - "m&a"
   - "слияние"
   - "поглощение"
+  - "margin"
+  - "cost price"
+  - "financial forecast"
+  - "unpublished pricing"
+  - "customer database"
+  - "contract terms"
+  - "source code"
+  - "internal architecture"
+  - "roadmap"
+  - "m&a"
