@@ -15,7 +15,7 @@ COPY --from=gitleaks-builder /go/bin/gitleaks /usr/local/bin/gitleaks
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-COPY app.py /app/app.py
+COPY app.py guardrail_rules.py /app/
 COPY policy.yaml /app/policy.yaml
 
 RUN gitleaks version \

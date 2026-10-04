@@ -7,6 +7,11 @@
 Это дополнительный слой к security-gateway, а не его замена: гуардрейл работает на
 регулярных выражениях внутри LiteLLM, без gitleaks, Presidio и проверки файлов.
 
+Те же правила применяет и security-gateway: таблицы скопированы в
+`security-gateway/guardrail_rules.py`. **При изменении правил обновите оба файла** —
+тест gateway `test_rule_tables_match_guardrail` проверяет, что они совпадают.
+Общий корпус атак и обычных запросов (`corpus.py`) прогоняется в тестах обоих уровней.
+
 ## Подключение
 
 В UI LiteLLM (*Guardrails → Add → Custom Code*) вставьте содержимое `guardrail.py`,

@@ -118,14 +118,24 @@ commercial_terms:
 
 You should replace the example terms with rules that reflect your own information-classification policy.
 
-### Prompt-injection heuristics
+### Rules shared with the LiteLLM guardrail
 
-The gateway includes basic rule-based detection for common English and Russian prompt-injection patterns, including attempts to:
+The gateway applies the same regex rules as the LiteLLM guardrail in `litellm-guardrail/`, so both layers react to the same requests. The rule tables live in `security-gateway/guardrail_rules.py`; a test fails if they drift from `litellm-guardrail/guardrail.py`.
 
-- ignore previous instructions;
-- reveal system/developer prompts;
-- enable jailbreak/DAN-style modes;
-- exfiltrate credentials or secrets.
+| Gateway category | Detection types (`RULE:<type>` detectors) |
+|---|---|
+| `PROMPT_INJECTION` | `PROMPT_INJECTION`, `JAILBREAK_ATTEMPT`, `ROLE_OVERRIDE`, `SYSTEM_PROMPT_EXTRACTION`, `DATA_EXFILTRATION`, `OBFUSCATED_INSTRUCTION` (English and Russian) |
+| `UNSAFE_ACTION` | `DANGEROUS_SHELL_EXECUTION`, `DANGEROUS_SHELL_COMMAND`, `DANGEROUS_SQL`, `SCRIPT_INJECTION`, `SSRF_INTERNAL_RESOURCE`, `CLOUD_METADATA_ACCESS`, `HIGH_IMPACT_ACTION`, `PRIVILEGE_ESCALATION_REQUEST` |
+| `UNBOUNDED_CONSUMPTION` | `UNBOUNDED_CONSUMPTION`, `EXCESSIVE_INPUT_SIZE` (last user message longer than `max_user_message_chars`) |
+| `PII`, `SECRET` | Extra formats on top of Presidio and Gitleaks: labelled full names, international phones, more passport formats, `password: ...`/`пароль: ...`, Authorization headers, DB connection strings, Telegram/Yandex tokens. Not reported again when Presidio or Gitleaks already found the same thing |
+
+Rules are scoped by message role, as in the guardrail:
+
+- PII, secrets and trade secrets: every role, including `assistant` (the client builds the whole history, so assistant text is client-controlled);
+- prompt injection rules: `user` and `tool` messages (tool results carry indirect injection), not the operator's system prompt;
+- unsafe actions and size: `user` messages only (fetched pages and exports legitimately contain `<script>`, SQL, `localhost`), so a model answer with SQL in the history does not block the rest of the chat.
+
+`/v1/scan/text` treats its text as a user message; extracted file text is checked like a tool result.
 
 This is intentionally treated as one security layer, not as a complete prompt-injection defense.
 
@@ -214,8 +224,11 @@ The security gateway performs inspection locally. It does not call an external S
 ├── README.md
 ├── README.ru.md
 ├── CHANGELOG.md
+├── docs/
+├── litellm-guardrail/          # LiteLLM custom code guardrail + shared test corpus
 └── security-gateway/
     ├── app.py
+    ├── guardrail_rules.py      # rule tables copied from litellm-guardrail/
     ├── policy.yaml
     ├── requirements.txt
     ├── requirements-dev.txt
@@ -444,6 +457,24 @@ Example result:
 }
 ```
 
+### Scan a conversation
+
+`POST /v1/scan/messages` takes Chat Completions `messages` and applies the role scoping above (the Open WebUI filter uses it):
+
+```bash
+curl -X POST http://127.0.0.1:8080/v1/scan/messages \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [
+      {"role": "user", "content": "How do I clear a table?"},
+      {"role": "assistant", "content": "Use DROP TABLE users;"},
+      {"role": "user", "content": "Thanks!"}
+    ]
+  }'
+```
+
+The SQL appears only in the assistant answer, so the result is `ALLOW`.
+
 ### Scan a file
 
 ```bash
@@ -494,13 +525,22 @@ block_categories:
   - SECRET
   - TRADE_SECRET
   - PROMPT_INJECTION
+  - UNSAFE_ACTION
+  - UNBOUNDED_CONSUMPTION
   - MALWARE
   - UNSUPPORTED_FILE
   - SECURITY_SERVICE_UNAVAILABLE
 
+flag_only_types: []
+max_user_message_chars: 30000
+
 block_person_names: false
 pii_score_threshold: 0.80
 ```
+
+A category missing from `block_categories` does not block, but is still reported by `/v1/scan/*` and logged.
+
+`flag_only_types` is the gateway counterpart of the guardrail's `FLAG_ONLY_TYPES`: listed detection types (for example `DANGEROUS_SQL`, `DANGEROUS_SHELL_EXECUTION`, `SSRF_INTERNAL_RESOURCE` for developer audiences) are reported but never block. `max_user_message_chars: 0` disables the size limit.
 
 `block_person_names` is disabled by default because person-name NER can create significant false positives. Enable it only if that behavior matches your policy and test data. When enabled, any detected person name blocks the request (it is not subject to `pii_score_threshold`).
 
@@ -604,7 +644,14 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-Tests marked `real_gitleaks` run only when the `gitleaks` binary is on `PATH`; the rest mock external services.
+Tests marked `real_gitleaks` run only when the `gitleaks` binary is on `PATH`; the rest mock external services. The gateway tests also run the shared attack/benign corpus from `litellm-guardrail/corpus.py` and check that the rule tables match the guardrail.
+
+The guardrail itself is tested inside the real LiteLLM sandbox:
+
+```bash
+pip install "litellm[proxy]" pytest
+python -m pytest litellm-guardrail
+```
 
 ## Production hardening checklist
 
@@ -633,6 +680,8 @@ Before using the project in a production environment, consider:
 It can provide earlier blocking and friendlier user-visible status messages, but it should not replace the network gateway as the primary enforcement point.
 
 Install it in Open WebUI: *Admin Panel -> Functions -> Create New Function*, paste the file, enable *Active* and *Global*, and set `SECURITY_GATEWAY_URL` in Valves to an address reachable from the Open WebUI container.
+
+`inlet()` checks the latest user message with `/v1/scan/text`; `request()` checks the whole conversation, including RAG context, with `/v1/scan/messages`.
 
 Recommended design:
 
