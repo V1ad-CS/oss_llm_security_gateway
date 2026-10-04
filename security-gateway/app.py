@@ -9,11 +9,13 @@ import tempfile
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import clamd
 import httpx
 import yaml
+
+import guardrail_rules as gr
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -59,6 +61,11 @@ log = logging.getLogger(APP_NAME)
 class TextRequest(BaseModel):
     text: str = Field(min_length=1)
     source: str = "message"
+
+
+class MessagesRequest(BaseModel):
+    messages: list[Any] = Field(min_length=1)
+    source: str = "messages"
 
 
 class Finding(BaseModel):
@@ -171,7 +178,8 @@ PRESIDIO_RECOGNIZERS = {
         supported_entity="EMAIL",
         patterns=[Pattern(
             name="email",
-            regex=r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
+            # git@host:org/repo — адрес SSH-репозитория, а не email.
+            regex=r"(?i)\b(?!git@)[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
             score=0.85,
         )],
     ),
@@ -335,25 +343,95 @@ def scan_gitleaks(text: str) -> list[Finding]:
             pass
 
 
-# ---------- Prompt injection / jailbreak heuristic layer ----------
+# ---------- Rules shared with the LiteLLM guardrail ----------
+#
+# Prompt injection, jailbreak, system prompt extraction, exfiltration, unsafe
+# actions (shell, SQL, XSS, SSRF...) and extra PII/secret formats. The rule
+# tables live in guardrail_rules.py and are identical to litellm-guardrail/,
+# so both layers react to the same requests.
 
-INJECTION_PATTERNS = [
-    ("IGNORE_INSTRUCTIONS_EN", re.compile(r"(?i)\b(ignore|disregard|forget)\b.{0,60}\b(previous|prior|above|system|developer)\b.{0,40}\b(instructions?|prompts?|messages?)\b", re.S)),
-    ("REVEAL_SYSTEM_EN", re.compile(r"(?i)\b(reveal|show|print|repeat|expose)\b.{0,50}\b(system|developer)\b.{0,30}\b(prompts?|instructions?|messages?)\b", re.S)),
-    ("IGNORE_INSTRUCTIONS_RU", re.compile(r"(?i)\b((?:про)?игнорируй(?:те)?|забудь(?:те)?|отмени(?:те)?)\b.{0,80}\b(предыдущ|системн|инструкц|правил|сообщен)", re.S)),
-    ("REVEAL_SYSTEM_RU", re.compile(r"(?i)\b(покажи|выведи|раскрой|напечатай)(?:те)?\b.{0,60}\b(системн|скрыт)\w*\b.{0,40}\b(промпт|инструкц|сообщен|правил)", re.S)),
-    ("JAILBREAK_TERMS", re.compile(r"(?i)\b(jailbreak|DAN mode|developer mode|режим DAN|джейлбрейк)\b")),
-    ("TOOL_EXFIL", re.compile(r"(?i)\b(send|upload|exfiltrat\w*|отправь(?:те)?|загрузи(?:те)?|передай(?:те)?)\b.{0,80}\b(secret|credential|token|password|парол|токен|ключ|секрет)", re.S)),
-]
+class Segment(NamedTuple):
+    """A piece of request text and the role of the message it came from."""
+    role: str
+    text: str
+    message: int = 0
 
 
-def scan_prompt_injection(text: str) -> list[Finding]:
-    hits = []
-    for name, pattern in INJECTION_PATTERNS:
-        count = len(pattern.findall(text))
-        if count:
-            hits.append(Finding(category="PROMPT_INJECTION", detector=name, score=0.9, count=count))
-    return hits
+KNOWN_ROLES = {"system", "developer", "user", "assistant", "tool"}
+ROLE_ALIASES = {"function": "tool"}
+# Role scoping as in the guardrail. DLP rules run on every role (see guardrail_rules).
+INJECTION_ROLES = {ROLE_ALIASES.get(r, r) for r in gr.INJECTION_ROLES}
+ACTION_ROLES = {ROLE_ALIASES.get(r, r) for r in gr.ACTION_ROLES}
+# Как MAX_USER_MESSAGE_CHARS в guardrail; переопределяется max_user_message_chars в policy.yaml.
+DEFAULT_MAX_USER_MESSAGE_CHARS = 30000
+
+
+def normalize_role(role: Any) -> str:
+    value = str(role or "user").strip().lower()
+    value = ROLE_ALIASES.get(value, value)
+    # Неизвестная роль проверяется по самым строгим правилам — как сообщение пользователя.
+    return value if value in KNOWN_ROLES else "user"
+
+
+def compile_rules(rules: list[tuple]) -> list[tuple]:
+    return [(name, re.compile(pattern), *rest) for name, pattern, *rest in rules]
+
+
+DLP_RULES = compile_rules(gr.DLP_RULES)
+VALIDATED_DLP_RULES = compile_rules(gr.VALIDATED_DLP_RULES)
+INJECTION_RULES = compile_rules(gr.INJECTION_RULES)
+ACTION_RULES = compile_rules(gr.ACTION_RULES)
+RULE_VALIDATORS = {"card": valid_card, "snils": valid_snils, "inn": valid_inn}
+VALIDATED_TYPES = {name for name, _, _ in VALIDATED_DLP_RULES}
+
+
+def last_user_message(segments: list[Segment]) -> str:
+    last = None
+    for segment in segments:
+        if segment.role == "user":
+            last = segment.message
+    if last is None:
+        return ""
+    return "\n".join(s.text for s in segments if s.role == "user" and s.message == last)
+
+
+def scan_rules(segments: list[Segment], primary: list[Finding]) -> list[Finding]:
+    found: list[str] = []
+    all_texts = [s.text for s in segments]
+    intent_texts = [s.text for s in segments if s.role in INJECTION_ROLES]
+    action_texts = [s.text for s in segments if s.role in ACTION_ROLES]
+
+    for name, rx in DLP_RULES:
+        if name not in found and any(rx.search(t) for t in all_texts):
+            found.append(name)
+    for name, rx, kind in VALIDATED_DLP_RULES:
+        validator = RULE_VALIDATORS[kind]
+        if name not in found and any(validator(m) for t in all_texts for m in rx.findall(t)):
+            found.append(name)
+    for name, rx in INJECTION_RULES:
+        if name not in found and any(rx.search(t) for t in intent_texts):
+            found.append(name)
+    for name, rx in ACTION_RULES:
+        if name not in found and any(rx.search(t) for t in action_texts):
+            found.append(name)
+
+    limit = int(policy_number("max_user_message_chars", DEFAULT_MAX_USER_MESSAGE_CHARS))
+    if limit > 0 and len(last_user_message(segments)) > limit:
+        found.append("EXCESSIVE_INPUT_SIZE")
+
+    primary_detectors = [f.detector for f in primary]
+    findings = []
+    for name in found:
+        # Не дублируем то, что уже нашли Presidio или Gitleaks.
+        prefixes = gr.SUPPRESSED_BY.get(name, ())
+        if any(d.startswith(p) for d in primary_detectors for p in prefixes):
+            continue
+        findings.append(Finding(
+            category=gr.TYPE_CATEGORY[name],
+            detector=f"RULE:{name}",
+            score=0.99 if name in VALIDATED_TYPES else 0.9,
+        ))
+    return findings
 
 
 # ---------- Commercial secret rules ----------
@@ -388,7 +466,7 @@ def scan_trade_secret(text: str) -> list[Finding]:
 # ---------- Policy ----------
 
 DEFAULT_BLOCK_CATEGORIES = [
-    "PII", "SECRET", "TRADE_SECRET", "PROMPT_INJECTION",
+    "PII", "SECRET", "TRADE_SECRET", "PROMPT_INJECTION", "UNSAFE_ACTION", "UNBOUNDED_CONSUMPTION",
     "MALWARE", "UNSUPPORTED_FILE", "SECURITY_SERVICE_UNAVAILABLE",
 ]
 
@@ -399,9 +477,13 @@ def decide(findings: list[Finding]) -> str:
 
     blocked = set(policy_list("block_categories", DEFAULT_BLOCK_CATEGORIES))
     threshold = policy_number("pii_score_threshold", 0.8)
+    # Аналог FLAG_ONLY_TYPES guardrail: тип попадает в результат и журнал, но не блокирует.
+    flag_only = set(policy_list("flag_only_types"))
 
     for f in findings:
         if f.category not in blocked:
+            continue
+        if f.detector.startswith("RULE:") and f.detector[len("RULE:"):] in flag_only:
             continue
         if f.category == "PII":
             if f.detector == "PERSON_NAME":
@@ -415,7 +497,8 @@ def decide(findings: list[Finding]) -> str:
     return "ALLOW"
 
 
-def scan_text_impl(text: str, source: str = "message") -> ScanResult:
+def scan_segments_impl(segments: list[Segment], source: str = "message") -> ScanResult:
+    text = "\n\n".join(s.text for s in segments)
     if len(text) > MAX_TEXT_CHARS:
         finding = Finding(category="POLICY", detector="TEXT_TOO_LARGE", score=1.0)
         findings = [finding]
@@ -425,7 +508,7 @@ def scan_text_impl(text: str, source: str = "message") -> ScanResult:
         findings += scan_pii(text)
         findings += scan_gitleaks(text)
         findings += scan_trade_secret(text)
-        findings += scan_prompt_injection(text)
+        findings += scan_rules(segments, findings)
         action = decide(findings)
 
     digest = hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
@@ -449,6 +532,10 @@ def scan_text_impl(text: str, source: str = "message") -> ScanResult:
     )
 
 
+def scan_text_impl(text: str, source: str = "message", role: str = "user") -> ScanResult:
+    return scan_segments_impl([Segment(role, text)], source)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if NATASHA_AVAILABLE and POLICY.get("block_person_names", False):
@@ -458,7 +545,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title=APP_NAME, version="0.2.0", lifespan=lifespan)
+app = FastAPI(title=APP_NAME, version="0.3.0", lifespan=lifespan)
 
 
 @app.get("/healthz")
@@ -468,7 +555,14 @@ def healthz() -> dict[str, str]:
 
 @app.post("/v1/scan/text", response_model=ScanResult)
 def scan_text(req: TextRequest) -> ScanResult:
+    """Проверка одного текста как сообщения пользователя."""
     return scan_text_impl(req.text, req.source)
+
+
+@app.post("/v1/scan/messages", response_model=ScanResult)
+def scan_messages(req: MessagesRequest) -> ScanResult:
+    """Проверка диалога (формат messages Chat Completions) с учётом ролей сообщений."""
+    return scan_segments_impl(extract_segments({"messages": req.messages}), req.source)
 
 
 # ---------- File scanning ----------
@@ -630,7 +724,10 @@ async def scan_file(file: UploadFile = File(...)) -> ScanResult:
         findings = [Finding(category="SECURITY_SERVICE_UNAVAILABLE", detector="TIKA_EXTRACT", score=1.0)]
         return _file_result("BLOCK" if FAIL_CLOSED else "ALLOW", findings, digest)
 
-    result = await run_in_threadpool(scan_text_impl, text, f"file:{mime}")
+    # Текст файла проверяется как внешний контент (как результат инструмента):
+    # ПДн, секреты, коммерческая тайна и prompt injection; SQL или <script>
+    # в документах и выгрузках сами по себе не блокируются.
+    result = await run_in_threadpool(scan_text_impl, text, f"file:{mime}", "tool")
     # Хеш ответа для файла должен относиться к исходному файлу, а не к извлечённому тексту.
     result.content_sha256 = digest
     return result
@@ -688,17 +785,10 @@ _STRUCTURAL_KEYS = {"model", "role", "type", "id", "call_id", "tool_call_id", "s
 _DATA_URL = re.compile(r"data:[\w.+-]+/[\w.+-]+(?:;[\w.+-]+=[\w.+-]+)*;base64,[A-Za-z0-9+/=\s]*")
 
 
-def _extract_openai_text(payload: Any) -> str:
-    """
-    Extract all text that is about to be sent upstream.
-
-    Walks the whole JSON body instead of a fixed set of fields, so nothing that
-    reaches the model is skipped: messages, tool_calls arguments, tool results,
-    Responses API `instructions`, `function_call_output`, tool definitions, etc.
-    Base64 data URLs (images/files) are skipped: they are not text.
-    """
+def _collect_strings(node: Any) -> list[str]:
+    """All text values of a JSON node; base64 data URLs (images/files) are skipped."""
     chunks: list[str] = []
-    stack: list[tuple[str | None, Any]] = [(None, payload)]
+    stack: list[tuple[str | None, Any]] = [(None, node)]
     while stack:
         key, node = stack.pop()
         if key in _BINARY_KEYS:
@@ -711,7 +801,57 @@ def _extract_openai_text(payload: Any) -> str:
             stack.extend(reversed([(str(k), v) for k, v in node.items()]))
         elif isinstance(node, list):
             stack.extend(reversed([(key, v) for v in node]))
-    return "\n\n".join(chunks)
+    return chunks
+
+
+def _responses_item_role(item: Any) -> str:
+    if not isinstance(item, dict):
+        return "user"
+    item_type = str(item.get("type") or "")
+    if item_type.endswith("_output"):        # function_call_output и т. п.: результат инструмента
+        return "tool"
+    if item_type.endswith("_call") or item_type == "reasoning":
+        return "assistant"
+    return normalize_role(item.get("role"))
+
+
+def _as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def extract_segments(payload: Any) -> list[Segment]:
+    """
+    Split all text that is about to be sent upstream into role-tagged segments.
+
+    Walks the whole JSON body instead of a fixed set of fields, so nothing that
+    reaches the model is skipped: messages, tool_calls arguments, tool results,
+    Responses API `instructions`, `function_call_output`, tool definitions, etc.
+    """
+    segments: list[Segment] = []
+
+    def add(role: str, node: Any, message: int) -> None:
+        segments.extend(Segment(role, text, message) for text in _collect_strings(node))
+
+    if not isinstance(payload, dict):
+        add("user", payload, 0)
+        return segments
+
+    index = 0
+    for msg in _as_list(payload.get("messages")):                       # Chat Completions
+        if isinstance(msg, dict):
+            add(normalize_role(msg.get("role")), {k: v for k, v in msg.items() if k != "role"}, index)
+        else:
+            add("user", msg, index)
+        index += 1
+    for item in _as_list(payload.get("input")):                         # Responses API
+        add(_responses_item_role(item), item, index)
+        index += 1
+    # Остальное (instructions, описания инструментов, ...) — конфигурация запроса,
+    # а не ввод пользователя: к ней применяются только DLP-правила.
+    add("system", {k: v for k, v in payload.items() if k not in ("messages", "input")}, -1)
+    return segments
 
 
 def _blocked_response(result: ScanResult) -> JSONResponse:
@@ -762,11 +902,11 @@ async def _proxy_json_to_litellm(request: Request, upstream_path: str):
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Expected JSON object in request body")
 
-    text = _extract_openai_text(body)
-    if text.strip():
+    segments = extract_segments(body)
+    if segments:
         # Presidio + gitleaks — синхронные и медленные: в threadpool, чтобы не
         # замораживать event loop (и все параллельные стримы) на время проверки.
-        result = await run_in_threadpool(scan_text_impl, text, f"gateway:{upstream_path}")
+        result = await run_in_threadpool(scan_segments_impl, segments, f"gateway:{upstream_path}")
         if result.action == "BLOCK":
             return _blocked_response(result)
 

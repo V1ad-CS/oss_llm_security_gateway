@@ -7,6 +7,7 @@ services:
       TIKA_URL: http://tika:9998
       CLAMAV_HOST: clamav
       CLAMAV_PORT: "3310"
+      CLAMAV_TIMEOUT: ${CLAMAV_TIMEOUT:-60}
       FAIL_CLOSED: ${FAIL_CLOSED:-true}
       MAX_TEXT_CHARS: ${MAX_TEXT_CHARS:-500000}
       MAX_FILE_BYTES: ${MAX_FILE_BYTES:-26214400}

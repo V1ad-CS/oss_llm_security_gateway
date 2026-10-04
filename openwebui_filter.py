@@ -51,17 +51,23 @@ class Filter:
                 chunks.append(f"[{role}]\n{text}")
         return "\n\n".join(chunks)
 
+    async def _post(self, path: str, payload: dict) -> dict:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(f"{self.valves.SECURITY_GATEWAY_URL.rstrip('/')}{path}", json=payload)
+            r.raise_for_status()
+            return r.json()
+
     async def _scan(self, text: str, source: str) -> dict:
         if not text.strip():
             return {"action": "ALLOW", "categories": [], "findings": []}
+        return await self._post("/v1/scan/text", {"text": text, "source": source})
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            r = await client.post(
-                f"{self.valves.SECURITY_GATEWAY_URL.rstrip('/')}/v1/scan/text",
-                json={"text": text, "source": source},
-            )
-            r.raise_for_status()
-            return r.json()
+    async def _scan_messages(self, messages: list[dict], source: str) -> dict:
+        # Роли важны: опасные действия ищутся только в сообщениях пользователя,
+        # prompt injection — ещё и в результатах инструментов, но не в ответах модели.
+        if not self._messages_to_text(messages).strip():
+            return {"action": "ALLOW", "categories": [], "findings": []}
+        return await self._post("/v1/scan/messages", {"messages": messages, "source": source})
 
     async def _notify(self, emitter, result: dict):
         if not emitter:
@@ -117,10 +123,8 @@ class Filter:
         **kwargs,
     ) -> dict:
         # Финальная граница: здесь уже присутствуют RAG chunks и tool context.
-        text = self._messages_to_text(body.get("messages", []))
-
         try:
-            result = await self._scan(text, "openwebui:request")
+            result = await self._scan_messages(body.get("messages", []), "openwebui:request")
         except Exception:
             if self.valves.FAIL_CLOSED:
                 raise Exception("Security gateway недоступен. Запрос заблокирован (fail-closed).")

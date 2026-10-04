@@ -12,7 +12,13 @@ Security Gateway не отправляет проверяемые данные �
 - ФИО через Natasha (опционально включается в policy.yaml).
 - API keys / tokens / credentials через Gitleaks.
 - Явные признаки коммерческой тайны через policy.yaml.
-- Базовые prompt-injection / jailbreak признаки на русском и английском.
+- Правила LiteLLM guardrail (те же, что в `litellm-guardrail/`): prompt injection, jailbreak,
+  смена роли, извлечение системного промпта, эксфильтрация (рус./англ.); опасные действия —
+  shell, SQL, XSS, SSRF, массовое удаление, повышение прав (категория `UNSAFE_ACTION`);
+  бесконечный вывод и слишком длинное сообщение (`UNBOUNDED_CONSUMPTION`).
+  Учитываются роли: опасные действия ищутся только в сообщениях пользователя, prompt
+  injection — в user и tool, ПДн и секреты — во всех сообщениях.
+  Отдельные типы можно перевести в режим «только фиксировать» через `flag_only_types`.
 - Файлы: ClamAV -> MIME detection/extraction через Apache Tika -> тот же DLP scan.
 - Fail-closed: если критический защитный сервис недоступен, запрос блокируется.
 
@@ -62,8 +68,8 @@ policy.yaml монтируется в контейнер: после правк�
 4. В Valves указать адрес gateway, доступный из контейнера Open WebUI.
 
 Фильтр выполняет:
-- inlet(): проверяет свежий текст пользователя;
-- request(): повторно проверяет весь payload прямо перед моделью.
+- inlet(): проверяет свежий текст пользователя (`/v1/scan/text`);
+- request(): повторно проверяет весь диалог с ролями прямо перед моделью (`/v1/scan/messages`).
   На этом этапе Open WebUI уже добавил RAG chunks/tool context.
 
 ## Важно про raw upload
