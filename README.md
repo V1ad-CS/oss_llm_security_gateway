@@ -25,6 +25,8 @@ If a request violates the configured security policy, the gateway returns HTTP 4
 
 Russian notes: [README.ru.md](README.ru.md). List of fixes: [CHANGELOG.md](CHANGELOG.md).
 
+The repository also contains [azure-firewall-audit](azure-firewall-audit/README.md) (documented in Russian): a read-only script that collects Azure Firewall configuration, reports drift from an approved baseline and deviations from a security standard, and never changes anything in Azure.
+
 ## Why this project exists
 
 LLM frontends are often connected directly to cloud model APIs. That creates several security risks:
@@ -225,6 +227,7 @@ The security gateway performs inspection locally. It does not call an external S
 ├── README.ru.md
 ├── CHANGELOG.md
 ├── docs/
+├── azure-firewall-audit/       # read-only Azure Firewall configuration audit
 ├── litellm-guardrail/          # LiteLLM custom code guardrail + shared test corpus
 └── security-gateway/
     ├── app.py
@@ -651,6 +654,14 @@ The guardrail itself is tested inside the real LiteLLM sandbox:
 ```bash
 pip install "litellm[proxy]" pytest
 python -m pytest litellm-guardrail
+```
+
+The Azure Firewall audit has its own tests that do not touch Azure:
+
+```bash
+cd azure-firewall-audit
+pip install -r requirements-dev.txt
+python -m pytest
 ```
 
 ## Production hardening checklist

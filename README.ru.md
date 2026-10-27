@@ -6,6 +6,10 @@ Open WebUI -> Global Filter -> Security Gateway -> LiteLLM -> Gemini/друга�
 
 Security Gateway не отправляет проверяемые данные во внешние SaaS.
 
+Отдельный инструмент в `azure-firewall-audit/` — аудит конфигурации Azure Firewall только на
+чтение: снимок конфигурации, изменения относительно эталона, отклонения от стандарта и отчёт
+(см. [azure-firewall-audit/README.md](azure-firewall-audit/README.md)).
+
 ## Что проверяется
 
 - PII через Presidio custom recognizers: российский паспорт (только рядом со словом «паспорт»/«серия»), СНИЛС, ИНН, телефон, email, банковская карта; для ИНН/СНИЛС/карт добавлена checksum-проверка.
