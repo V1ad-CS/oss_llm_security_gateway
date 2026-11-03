@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Read-only audit of Azure Firewall configuration.
+Read-only audit of Azure Firewall and Network Security Group configuration.
 
 Reads Azure Firewall resources, their Firewall Policies (with base policies and
-rule collection groups), referenced IP Groups, diagnostic settings and,
-optionally, Activity Log entries through Azure Resource Manager, then
+rule collection groups), referenced IP Groups, diagnostic settings, Network
+Security Groups with their rules and associations and, optionally, Activity Log
+entries through Azure Resource Manager, then
 
   * compares the snapshot with an approved baseline snapshot (drift),
   * checks it against the security standard in standard.yaml (deviations),
@@ -46,7 +47,7 @@ import yaml
 from requests.adapters import HTTPAdapter
 
 TOOL_NAME = "azfw-audit"
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.1.0"
 SNAPSHOT_SCHEMA_VERSION = 1
 
 DEFAULT_ARM_ENDPOINT = "https://management.azure.com"
@@ -93,10 +94,33 @@ BACKREF_KEYS = {
 LOG_DESTINATIONS = ("workspaceId", "storageAccountId", "eventHubAuthorizationRuleId", "marketplacePartnerId")
 DIAGNOSTICS_SUFFIX = "/providers/microsoft.insights/diagnosticsettings"
 
+# NSG rules accept one value or a list for the same field; both are merged into the list.
+NSG_SINGLE_TO_LIST = (
+    ("sourceAddressPrefix", "sourceAddressPrefixes"),
+    ("destinationAddressPrefix", "destinationAddressPrefixes"),
+    ("sourcePortRange", "sourcePortRanges"),
+    ("destinationPortRange", "destinationPortRanges"),
+)
+NSG_ASG_KEYS = ("sourceApplicationSecurityGroups", "destinationApplicationSecurityGroups")
+NSG_PORTLESS_PROTOCOLS = frozenset({"icmp", "esp", "ah"})
+
+# Entity kinds by where they are discovered; a failed listing blinds only its own kinds.
+FIREWALL_KINDS = ("firewall", "firewall_policy", "rule_collection_group", "rule_collection", "rule", "ip_group", "diagnostic_setting")
+NSG_KINDS = ("network_security_group", "security_rule")
+
+# Snapshot sections that can be switched off (--no-diagnostics, --no-nsg) or are
+# missing in snapshots of older versions, and the entity kinds read from them.
+OPTIONAL_SECTIONS = {
+    "diagnostic_settings": ("параметры диагностики", ("diagnostic_setting",)),
+    "network_security_groups": ("NSG", NSG_KINDS),
+}
+
 ACTIVITY_OPERATION_PREFIXES = (
     "microsoft.network/azurefirewalls/",
     "microsoft.network/firewallpolicies/",
     "microsoft.network/ipgroups/",
+    "microsoft.network/networksecuritygroups/",
+    "microsoft.network/virtualnetworks/subnets/",  # attaching or detaching an NSG is a subnet write
     "microsoft.insights/diagnosticsettings/",
 )
 ACTIVITY_OPERATION_SUFFIXES = ("/write", "/delete", "/deploy/action")
@@ -118,7 +142,10 @@ DEFAULT_STANDARD: dict[str, Any] = {
     ],
     "public_dnat_allowed_ports": [80, 443],
     "any_address_tokens": ["*", "0.0.0.0/0", "0.0.0.0-255.255.255.255", "::/0"],
-    "expected_properties": {"firewall": {}, "firewall_policy": {}},
+    "nsg_public_sources": ["*", "0.0.0.0/0", "::/0", "Internet"],
+    "nsg_public_allowed_ports": [80, 443],
+    "require_nsg_association": True,
+    "expected_properties": {"firewall": {}, "firewall_policy": {}, "network_security_group": {}},
     "exceptions": [],
 }
 
@@ -219,6 +246,29 @@ CHECKS = {
         "У правила нет описания",
         "Опишите назначение правила и укажите номер заявки на изменение.",
     ),
+    "NSG-INTERNET-ANY-PORT": (
+        "NSG открывает все порты для входящего трафика из Интернета",
+        "Удалите правило или ограничьте источники и порты; входящий доступ из Интернета "
+        "публикуйте через Azure Firewall, Application Gateway или Load Balancer.",
+    ),
+    "NSG-SENSITIVE-PORT": (
+        "NSG открывает административный или чувствительный порт для Интернета",
+        "Ограничьте источник доверенными адресами; для RDP/SSH используйте Azure Bastion, "
+        "JIT-доступ Defender for Cloud или VPN.",
+    ),
+    "NSG-WIDE-PORT": (
+        "NSG открывает для Интернета слишком широкий диапазон портов",
+        "Укажите только порты, которые нужны приложению.",
+    ),
+    "NSG-PUBLIC-PORT": (
+        "NSG открывает для Интернета порт вне списка разрешённых",
+        "Ограничьте источники правила или добавьте порт в nsg_public_allowed_ports, "
+        "если публикация согласована.",
+    ),
+    "NSG-UNUSED": (
+        "NSG не привязана ни к подсети, ни к сетевому интерфейсу",
+        "Привяжите NSG к нужной подсети или удалите её; проверьте, не осталась ли подсеть без защиты.",
+    ),
 }
 
 KIND_TITLES = {
@@ -229,6 +279,8 @@ KIND_TITLES = {
     "rule": "Правило",
     "ip_group": "IP-группа",
     "diagnostic_setting": "Диагностика",
+    "network_security_group": "NSG",
+    "security_rule": "Правило NSG",
 }
 
 log = logging.getLogger(TOOL_NAME)
@@ -279,8 +331,11 @@ _RESOURCE_GROUP_RE = re.compile(r"/resourcegroups/([^/]+)", re.IGNORECASE)
 
 
 def id_label(resource_id: str) -> str:
-    """'<resource group>/<name>' for an ARM id."""
-    name = resource_id.rstrip("/").rsplit("/", 1)[-1]
+    """'<resource group>/<name>' for an ARM id; '<resource group>/<vnet>/<subnet>' for a subnet."""
+    parts = resource_id.rstrip("/").split("/")
+    name = parts[-1]
+    if len(parts) >= 3 and parts[-2].lower() == "subnets":
+        name = f"{parts[-3]}/{name}"
     match = _RESOURCE_GROUP_RE.search(resource_id)
     return f"{match.group(1)}/{name}" if match else name
 
@@ -521,23 +576,42 @@ def ip_group_refs(*nodes: Any) -> set[str]:
 class Collector:
     """Reads the configuration through ArmClient; never writes anything."""
 
-    def __init__(self, client: ArmClient, *, api_version: str = NETWORK_API_VERSION, diagnostics: bool = True):
+    def __init__(
+        self,
+        client: ArmClient,
+        *,
+        api_version: str = NETWORK_API_VERSION,
+        diagnostics: bool = True,
+        nsg: bool = True,
+    ):
         self.client = client
         self.api_version = api_version
         self.diagnostics = diagnostics
+        self.nsg = nsg
         self.errors: list[dict] = []
 
-    def _error(self, scope: str, stage: str, exc: ArmError) -> None:
+    def _error(self, scope: str, stage: str, exc: ArmError, kinds: Iterable[str] | None = None) -> None:
         # 404 means the object does not exist: that is a result (e.g. a deleted
         # firewall), not a gap in the data.
-        self.errors.append({
+        error = {
             "scope": scope.lower(),
             "stage": stage,
             "status": exc.status,
             "message": exc.message,
             "incomplete": exc.status != 404,
-        })
+        }
+        if kinds:
+            error["kinds"] = list(kinds)  # a listing of one resource type hides only that type
+        self.errors.append(error)
         log.warning("%s %s: %s", stage, scope, exc.message)
+
+    def _not_found(self, names: list[str], found: set[str], scope: str, stage: str, message: str) -> None:
+        for name in names:
+            if name.lower() not in found:
+                self.errors.append({
+                    "scope": f"{scope}/{name.lower()}", "stage": stage, "status": 404,
+                    "message": message, "incomplete": False,
+                })
 
     def collect(
         self,
@@ -545,24 +619,22 @@ class Collector:
         *,
         resource_group: str | None = None,
         firewall_names: Iterable[str] = (),
+        nsg_names: Iterable[str] = (),
         all_policies: bool = False,
         activity_days: int = 0,
     ) -> dict:
         self.errors = []
         started = utcnow()
         names = [name for name in firewall_names if name]
+        nsg_filter = [name for name in nsg_names if name]
 
         firewalls: dict[str, dict] = {}
         for subscription in subscriptions:
             for firewall in self._firewalls(subscription, resource_group, names):
                 firewalls[firewall["id"].lower()] = firewall
-        found = {fw.get("name", "").lower() for fw in firewalls.values()}
-        for name in names:
-            if name.lower() not in found and not resource_group:
-                self.errors.append({
-                    "scope": f"azurefirewalls/{name.lower()}", "stage": "firewall", "status": 404,
-                    "message": "брандмауэр с таким именем не найден", "incomplete": False,
-                })
+        if not resource_group:  # with a resource group, a missing name is already a 404 from GET
+            found = {fw.get("name", "").lower() for fw in firewalls.values()}
+            self._not_found(names, found, "azurefirewalls", "firewall", "брандмауэр с таким именем не найден")
 
         policy_ids = [ref_id(props(fw).get("firewallPolicy")) for fw in firewalls.values()]
         if all_policies:
@@ -571,6 +643,15 @@ class Collector:
         policies = self._policies(policy_ids)
         ip_groups = self._ip_groups(sorted(ip_group_refs(firewalls, policies)))
         diagnostics = self._diagnostics(firewalls) if self.diagnostics else None
+
+        nsgs: dict[str, dict] | None = None
+        if self.nsg:
+            nsgs = {}
+            for subscription in subscriptions:
+                for nsg in self._nsgs(subscription, resource_group, nsg_filter):
+                    nsgs[nsg["id"].lower()] = nsg
+            found = {nsg.get("name", "").lower() for nsg in nsgs.values()}
+            self._not_found(nsg_filter, found, "networksecuritygroups", "nsg", "NSG с таким именем не найдена")
 
         snapshot = {
             "schema_version": SNAPSHOT_SCHEMA_VERSION,
@@ -581,6 +662,8 @@ class Collector:
                 "resource_group": resource_group,
                 "firewalls": sorted(names),
                 "all_policies": all_policies,
+                "nsgs": sorted(nsg_filter),
+                "include_nsgs": self.nsg,
             },
             "arm_endpoint": self.client.endpoint,
             "api_versions": {"network": self.api_version, "diagnostics": DIAGNOSTICS_API_VERSION},
@@ -588,6 +671,7 @@ class Collector:
             "firewall_policies": policies,
             "ip_groups": ip_groups,
             "diagnostic_settings": diagnostics,
+            "network_security_groups": nsgs,
             "activity_log": None,
             "errors": self.errors,
         }
@@ -610,10 +694,17 @@ class Collector:
                 except ArmError as exc:
                     self._error(path, "firewall", exc)
             return result
+        return self._list(base, "azureFirewalls", "firewall list", names, FIREWALL_KINDS)
+
+    def _nsgs(self, subscription: str, resource_group: str | None, names: list[str]) -> list[dict]:
+        # A listing returns every NSG with its rules and subnet/NIC associations.
+        return self._list(self._scope_path(subscription, resource_group), "networkSecurityGroups", "nsg list", names, NSG_KINDS)
+
+    def _list(self, base: str, resource_type: str, stage: str, names: list[str], kinds: tuple[str, ...]) -> list[dict]:
         try:
-            items = self.client.list(f"{base}/providers/Microsoft.Network/azureFirewalls", self.api_version)
+            items = self.client.list(f"{base}/providers/Microsoft.Network/{resource_type}", self.api_version)
         except ArmError as exc:
-            self._error(base, "firewall list", exc)
+            self._error(base, stage, exc, kinds)
             return []
         if names:
             wanted = {name.lower() for name in names}
@@ -622,11 +713,7 @@ class Collector:
 
     def _list_ids(self, subscription: str, resource_group: str | None, resource_type: str, stage: str) -> list[str]:
         base = self._scope_path(subscription, resource_group)
-        try:
-            return [item["id"] for item in self.client.list(f"{base}/providers/Microsoft.Network/{resource_type}", self.api_version)]
-        except ArmError as exc:
-            self._error(base, stage, exc)
-            return []
+        return [item["id"] for item in self._list(base, resource_type, stage, [], FIREWALL_KINDS)]
 
     def _policies(self, policy_ids: list[str]) -> dict[str, dict]:
         result: dict[str, dict] = {}
@@ -738,6 +825,20 @@ def _activity_row(event: dict) -> dict | None:
 # Snapshot model and drift
 # ---------------------------------------------------------------------------
 
+def flatten_security_rule(rule: dict) -> dict:
+    """NSG rule with single-value fields merged into their lists and application
+    security groups as plain ids, so both spellings of one rule compare equal."""
+    data = dict(props(rule))
+    for single, plural in NSG_SINGLE_TO_LIST:
+        value = data.pop(single, None)
+        merged = [value] if value not in (None, "") else []
+        merged += [item for item in data.get(plural) or [] if item not in merged]
+        data[plural] = merged
+    for key in NSG_ASG_KEYS:
+        data[key] = [ref_id(group) for group in data.get(key) or [] if isinstance(group, dict)]
+    return {"name": rule.get("name"), **data}
+
+
 @dataclass
 class Entity:
     kind: str
@@ -809,15 +910,32 @@ def build_entities(snapshot: dict) -> dict[str, Entity]:
         owner = firewall_id + DIAGNOSTICS_SUFFIX
         for setting in settings:
             add(f"{owner}|{setting.get('name')}", "diagnostic_setting", f"{label}/diagnostics/{setting.get('name')}", owner, setting)
+
+    for nsg_id, nsg in (snapshot.get("network_security_groups") or {}).items():
+        label = resource_label(nsg)
+        nsg_props = dict(props(nsg))
+        rules = nsg_props.pop("securityRules", None) or []
+        nsg_props.pop("defaultSecurityRules", None)  # fixed by Azure, cannot be changed
+        # Associations are back-references, but the NSG is the only place they are
+        # read from, so they are compared here (as plain ids). NICs of scale set
+        # instances come and go with autoscaling and are left out.
+        for key in ("subnets", "networkInterfaces", "flowLogs"):
+            nsg_props[key] = [
+                ref_id(item) for item in nsg_props.get(key) or []
+                if isinstance(item, dict) and "/virtualmachinescalesets/" not in ref_id(item)
+            ]
+        add(nsg_id, "network_security_group", label, nsg_id, {**nsg, "properties": nsg_props})
+        for rule in rules:
+            add(f"{nsg_id}|{rule.get('name')}", "security_rule", f"{label}/{rule.get('name')}", nsg_id, flatten_security_rule(rule))
     return entities
 
 
-def _blind(owner: str, snapshot: dict) -> bool:
+def _blind(entity: Entity, snapshot: dict) -> bool:
     """True when the snapshot could not read the place the entity lives in."""
-    if snapshot.get("diagnostic_settings") is None and owner.endswith(DIAGNOSTICS_SUFFIX):
-        return True
     return any(
-        error.get("incomplete", True) and under(owner, error.get("scope", ""))
+        error.get("incomplete", True)
+        and under(entity.owner, error.get("scope", ""))
+        and entity.kind in error.get("kinds", (entity.kind,))
         for error in snapshot.get("errors") or []
     )
 
@@ -855,19 +973,20 @@ def _pair_renames(added: list[dict], removed: list[dict]) -> list[dict]:
         data = {key: value for key, value in record["data"].items() if key != "name"}
         return record["key"].rsplit("|", 1)[0], canonical(data)
 
-    pool: dict[tuple[str, str], list[dict]] = {}
+    rule_kinds = ("rule", "security_rule")
+    pool: dict[tuple[str, str, str], list[dict]] = {}
     for record in added:
-        if record["kind"] == "rule":
-            pool.setdefault(signature(record), []).append(record)
+        if record["kind"] in rule_kinds:
+            pool.setdefault((record["kind"], *signature(record)), []).append(record)
     renamed = []
     for record in list(removed):
-        candidates = pool.get(signature(record)) if record["kind"] == "rule" else None
+        candidates = pool.get((record["kind"], *signature(record))) if record["kind"] in rule_kinds else None
         if candidates:
             new_record = candidates.pop(0)
             removed.remove(record)
             added.remove(new_record)
             renamed.append({
-                "key": new_record["key"], "kind": "rule", "old_label": record["label"],
+                "key": new_record["key"], "kind": record["kind"], "old_label": record["label"],
                 "label": new_record["label"], "data": new_record["data"],
             })
     return renamed
@@ -880,11 +999,22 @@ def _scope_key(snapshot: dict) -> str:
         "resource_group": (scope.get("resource_group") or "").lower(),
         "firewalls": sorted(f.lower() for f in scope.get("firewalls") or []),
         "all_policies": bool(scope.get("all_policies")),
+        "nsgs": sorted(n.lower() for n in scope.get("nsgs") or []),
     })
 
 
 def diff_snapshots(baseline: dict, current: dict) -> dict:
-    old, new = build_entities(baseline), build_entities(current)
+    # A section that one of the snapshots did not collect is left out entirely
+    # instead of showing all of its objects as added or removed.
+    skipped_kinds: set[str] = set()
+    notes = []
+    for section, (title, kinds) in OPTIONAL_SECTIONS.items():
+        missing = [where for where, snapshot in (("эталоне", baseline), ("текущем снимке", current)) if snapshot.get(section) is None]
+        if missing:
+            skipped_kinds.update(kinds)
+            notes.append(f"{title[0].upper() + title[1:]} не сравнивались: в {' и '.join(missing)} они не собирались.")
+    old = {key: e for key, e in build_entities(baseline).items() if e.kind not in skipped_kinds}
+    new = {key: e for key, e in build_entities(current).items() if e.kind not in skipped_kinds}
     added, removed, modified, not_compared = [], [], [], []
     for key in sorted(old.keys() | new.keys()):
         before, after = old.get(key), new.get(key)
@@ -893,12 +1023,12 @@ def diff_snapshots(baseline: dict, current: dict) -> dict:
             if changes:
                 modified.append({"key": key, "kind": after.kind, "label": after.label, "changes": changes})
         elif before is not None:
-            if _blind(before.owner, current):
+            if _blind(before, current):
                 not_compared.append({**_entity_record(key, before), "reason": "не прочитан в текущем снимке"})
             else:
                 removed.append(_entity_record(key, before))
         elif after is not None:
-            if _blind(after.owner, baseline):
+            if _blind(after, baseline):
                 not_compared.append({**_entity_record(key, after), "reason": "не был прочитан в эталоне"})
             else:
                 added.append(_entity_record(key, after))
@@ -917,6 +1047,7 @@ def diff_snapshots(baseline: dict, current: dict) -> dict:
         "baseline_collected_at": baseline.get("collected_at"),
         "current_collected_at": current.get("collected_at"),
         "scope_mismatch": _scope_key(baseline) != _scope_key(current),
+        "notes": notes,
         "summary": summary,
         "added": added,
         "removed": removed,
@@ -959,19 +1090,24 @@ def load_standard(path: str | Path | None) -> dict:
     tier = standard.get("minimum_sku_tier")
     if tier is not None and str(tier).lower() not in SKU_RANK:
         raise ConfigError(f"minimum_sku_tier: ожидается Basic, Standard, Premium или null, получено {tier!r}")
-    for key in ("sensitive_ports", "public_dnat_allowed_ports", "any_address_tokens", "required_log_categories", "exceptions"):
+    lists = (
+        "sensitive_ports", "public_dnat_allowed_ports", "any_address_tokens", "required_log_categories",
+        "nsg_public_sources", "nsg_public_allowed_ports", "exceptions",
+    )
+    for key in lists:
         if not isinstance(standard.get(key) or [], list):
             raise ConfigError(f"{key}: ожидается список")
         standard[key] = standard.get(key) or []
     try:
         standard["sensitive_ports"] = sorted({int(port) for port in standard["sensitive_ports"]})
         standard["public_dnat_allowed_ports"] = sorted({int(port) for port in standard["public_dnat_allowed_ports"]})
+        standard["nsg_public_allowed_ports"] = sorted({int(port) for port in standard["nsg_public_allowed_ports"]})
         standard["max_port_range"] = int(standard["max_port_range"])
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"порты и max_port_range должны быть числами: {exc}") from exc
     expected = standard.get("expected_properties") or {}
     if not isinstance(expected, dict) or not all(isinstance(v or {}, dict) for v in expected.values()):
-        raise ConfigError("expected_properties: ожидается {firewall: {путь: значение}, firewall_policy: {...}}")
+        raise ConfigError("expected_properties: ожидается {firewall: {путь: значение}, firewall_policy: {...}, network_security_group: {...}}")
     standard["expected_properties"] = {key: value or {} for key, value in expected.items()}
     return standard
 
@@ -1017,6 +1153,37 @@ def _matches(actual: Any, expected: Any) -> bool:
     return actual == expected
 
 
+def subtract_ports(ranges: list[tuple[int, int]], cut: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Port ranges left after removing the ranges in cut."""
+    result = []
+    for low, high in ranges:
+        pieces = [(low, high)]
+        for cut_low, cut_high in cut:
+            remaining = []
+            for start, end in pieces:
+                if cut_high < start or cut_low > end:
+                    remaining.append((start, end))
+                    continue
+                if start < cut_low:
+                    remaining.append((start, cut_low - 1))
+                if cut_high < end:
+                    remaining.append((cut_high + 1, end))
+            pieces = remaining
+        result.extend(pieces)
+    return result
+
+
+def fmt_port_ranges(ranges: list[tuple[int, int]]) -> list[str]:
+    return ["*" if low <= 1 and high >= 65535 else (str(low) if low == high else f"{low}-{high}") for low, high in ranges]
+
+
+def _nsg_priority(rule: dict) -> int:
+    try:
+        return int(rule.get("priority"))
+    except (TypeError, ValueError):
+        return 0
+
+
 @dataclass
 class RuleView:
     """A rule from a policy or a classic collection, in one shape for the checks."""
@@ -1041,8 +1208,10 @@ class Auditor:
         self.policies = snapshot.get("firewall_policies") or {}
         self.ip_groups = snapshot.get("ip_groups") or {}
         self.any_tokens = {str(token).strip().lower() for token in standard["any_address_tokens"]}
+        self.nsg_public_tokens = {str(token).strip().lower() for token in standard["nsg_public_sources"]}
         self.findings: list[dict] = []
         self.firewall_settings: dict[str, dict] = {}
+        self.nsg_settings: dict[str, dict] = {}
         self.policy_rules: dict[str, list[RuleView]] = {}
         self.classic_rules: list[RuleView] = []
 
@@ -1057,6 +1226,8 @@ class Auditor:
         for rule in rules:
             self._check_rule(rule)
         self._check_duplicates(rules)
+        for nsg_id, nsg in sorted((self.snapshot.get("network_security_groups") or {}).items()):
+            self._check_nsg(nsg_id, nsg)
         self.findings.sort(key=lambda f: (-SEVERITY_RANK[f["severity"]], f["object"].lower(), f["check"]))
         return self.findings
 
@@ -1369,6 +1540,98 @@ class Auditor:
             if not _matches(actual, expected):
                 self._add("AZFW-PROP", "medium", label, f"{path} = {fmt_value(actual)}, по стандарту: {fmt_value(expected)}")
 
+    # -- network security groups ---------------------------------------------
+
+    def _nsg_public(self, address: str) -> bool:
+        return address.strip().lower() in self.nsg_public_tokens or self._any_address(address)
+
+    def _covers(self, wide: list[str], narrow: list[str]) -> bool:
+        if any(self._any_address(address) for address in wide):
+            return True
+        return {address.lower() for address in narrow} <= {address.lower() for address in wide}
+
+    def _nsg_internet_ports(self, rule: dict, rules: list[dict]) -> list[tuple[int, int]]:
+        """Ports an inbound Allow rule opens to the Internet, minus what Deny rules
+        with a higher priority (a lower number) already block."""
+        if str(rule.get("direction")).lower() != "inbound" or str(rule.get("access")).lower() != "allow":
+            return []
+        protocol = str(rule.get("protocol") or "*").lower()
+        if protocol in NSG_PORTLESS_PROTOCOLS or not any(self._nsg_public(s) for s in rule["sourceAddressPrefixes"]):
+            return []
+        ranges = [(low, high) for _, low, high in parse_ports(rule["destinationPortRanges"])]
+        destinations = rule["destinationAddressPrefixes"] + rule["destinationApplicationSecurityGroups"]
+        for other in rules:  # sorted by priority
+            if _nsg_priority(other) >= _nsg_priority(rule):
+                break
+            other_protocol = str(other.get("protocol") or "*").lower()
+            if (
+                str(other.get("direction")).lower() != "inbound"
+                or str(other.get("access")).lower() != "deny"
+                or other_protocol not in ("*", protocol)
+                or not any(self._nsg_public(s) for s in other["sourceAddressPrefixes"])
+                or not covers_all_ports(parse_ports(other["sourcePortRanges"] or ["*"]))
+                or not self._covers(other["destinationAddressPrefixes"] + other["destinationApplicationSecurityGroups"], destinations)
+            ):
+                continue
+            ranges = subtract_ports(ranges, [(low, high) for _, low, high in parse_ports(other["destinationPortRanges"])])
+        return ranges
+
+    def _check_nsg(self, nsg_id: str, nsg: dict) -> None:
+        p = props(nsg)
+        label = resource_label(nsg)
+        state = p.get("provisioningState")
+        if state and state != "Succeeded":
+            self._add("AZFW-STATE", "high", label, f"provisioningState: {state}")
+        subnets = [ref_id(item) for item in p.get("subnets") or [] if isinstance(item, dict)]
+        nics = [ref_id(item) for item in p.get("networkInterfaces") or [] if isinstance(item, dict)]
+        if self.standard.get("require_nsg_association") and not subnets and not nics:
+            self._add("NSG-UNUSED", "info", label, "Нет привязанных подсетей и сетевых интерфейсов")
+
+        rules = sorted((flatten_security_rule(rule) for rule in p.get("securityRules") or []), key=_nsg_priority)
+        exposed = 0
+        for rule in rules:
+            path = f"{label}/{rule.get('name')}"
+            if self.standard.get("require_rule_description") and not rule.get("description"):
+                self._add("AZFW-NO-DESC", "info", path, "Описание не заполнено")
+            ranges = self._nsg_internet_ports(rule, rules)
+            if ranges:
+                exposed += 1
+                self._check_nsg_exposure(path, rule, ranges)
+        self._check_expected(label, "network_security_group", nsg)
+        self.nsg_settings[nsg_id] = {
+            "label": label,
+            "location": nsg.get("location"),
+            "rules": len(rules),
+            "subnets": [id_label(subnet) for subnet in subnets],
+            "network_interfaces": len(nics),
+            "internet_inbound_rules": exposed,
+            "state": state,
+        }
+
+    def _check_nsg_exposure(self, path: str, rule: dict, ranges: list[tuple[int, int]]) -> None:
+        sources = [s for s in rule["sourceAddressPrefixes"] if self._nsg_public(s)]
+        where = f"источник {short_list(sources)}, протокол {rule.get('protocol') or '*'}, приоритет {rule.get('priority')}"
+        tuples = [(text, low, high) for text, (low, high) in zip(fmt_port_ranges(ranges), ranges)]
+        if covers_all_ports(tuples):
+            self._add("NSG-INTERNET-ANY-PORT", "critical", path, f"Открыты все порты; {where}")
+            return
+        hits = self._sensitive(tuples)
+        if hits:
+            self._add("NSG-SENSITIVE-PORT", "high", path, f"Из Интернета доступны порты {short_list(hits)}; {where}")
+            return
+        limit = self.standard["max_port_range"]
+        wide = [text for text, low, high in tuples if high - low + 1 > limit]
+        if wide:
+            self._add("NSG-WIDE-PORT", "medium", path, f"Диапазон шире {limit} портов: {short_list(wide)}; {where}")
+            return
+        allowed = set(self.standard["nsg_public_allowed_ports"])
+        extra = [text for text, low, high in tuples if not (low == high and low in allowed)]
+        if extra:
+            self._add("NSG-PUBLIC-PORT", "medium", path, f"Из Интернета доступны порты {short_list(extra)}; {where}")
+
+    def nsg_inventory(self) -> list[dict]:
+        return sorted(self.nsg_settings.values(), key=lambda row: row["label"].lower())
+
     def policy_inventory(self) -> list[dict]:
         rows = []
         for policy_id, entry in sorted(self.policies.items(), key=lambda item: resource_label(item[1]["resource"]).lower()):
@@ -1453,6 +1716,8 @@ def _snapshot_meta(snapshot: dict) -> dict:
         "firewalls": len(snapshot.get("firewalls") or {}),
         "firewall_policies": len(snapshot.get("firewall_policies") or {}),
         "ip_groups": len(snapshot.get("ip_groups") or {}),
+        # None: the snapshot was taken without NSGs (--no-nsg or an older version)
+        "network_security_groups": None if snapshot.get("network_security_groups") is None else len(snapshot["network_security_groups"]),
     }
 
 
@@ -1487,6 +1752,7 @@ def build_report(
         "inventory": {
             "firewalls": [auditor.firewall_settings[key] for key in sorted(auditor.firewall_settings, key=lambda k: auditor.firewall_settings[k]["label"].lower())],
             "firewall_policies": auditor.policy_inventory(),
+            "network_security_groups": auditor.nsg_inventory(),
         },
         "drift": drift,
         "findings": findings,
@@ -1518,9 +1784,26 @@ def describe_rule(rule: dict) -> str:
     return text
 
 
+def describe_security_rule(rule: dict) -> str:
+    def join(*keys: str) -> str:
+        return short_list([item for key in keys for item in rule.get(key) or []], 4)
+
+    sources = join("sourceAddressPrefixes", "sourceApplicationSecurityGroups")
+    destinations = join("destinationAddressPrefixes", "destinationApplicationSecurityGroups")
+    return (
+        f"{rule.get('direction') or '?'} {rule.get('access') or '?'} {rule.get('protocol') or '*'} "
+        f"{sources} → {destinations} : {join('destinationPortRanges')}, приоритет {rule.get('priority', '?')}"
+    )
+
+
 def describe_entity(kind: str, data: dict) -> str:
     if kind == "rule":
         return describe_rule(data)
+    if kind == "security_rule":
+        return describe_security_rule(data)
+    if kind == "network_security_group":
+        p = props(data)
+        return f"{data.get('location') or '?'}, подсетей: {len(p.get('subnets') or [])}, интерфейсов: {len(p.get('networkInterfaces') or [])}"
     if kind == "rule_collection":
         action = (data.get("action") or {}).get("type")
         return f"приоритет {data.get('priority', '?')}, действие {action or '?'}"
@@ -1569,6 +1852,10 @@ def _scope_text(scope: dict) -> str:
         parts.append(f"брандмауэры: {short_list(scope['firewalls'])}")
     if scope.get("all_policies"):
         parts.append("все политики")
+    if scope.get("nsgs"):
+        parts.append(f"NSG: {short_list(scope['nsgs'])}")
+    elif scope.get("include_nsgs") is False:
+        parts.append("без NSG")
     return "; ".join(parts)
 
 
@@ -1617,7 +1904,7 @@ def report_blocks(report: dict) -> list[tuple]:
     """The report as a list of format-neutral blocks: ("h1"|"h2"|"h3"|"p", text),
     ("kv", [(key, value)]) and ("table", headers, rows)."""
     snapshot, baseline, summary = report["snapshot"], report["baseline"], report["summary"]
-    blocks: list[tuple] = [("h1", "Отчёт аудита Azure Firewall")]
+    blocks: list[tuple] = [("h1", "Отчёт аудита Azure Firewall и NSG")]
     blocks.append(("kv", [
         ("Сформирован", fmt_time(report["generated_at"])),
         ("Снимок конфигурации", f"{fmt_time(snapshot['collected_at'])}; {_scope_text(snapshot['scope'])}"),
@@ -1635,11 +1922,12 @@ def report_blocks(report: dict) -> list[tuple]:
         ["Брандмауэры", snapshot["firewalls"]],
         ["Политики", snapshot["firewall_policies"]],
         ["IP-группы", snapshot["ip_groups"]],
+        ["NSG", "не собирались" if snapshot["network_security_groups"] is None else snapshot["network_security_groups"]],
         ["Принятые исключения", summary["accepted_findings"]],
         ["Ошибки получения данных", summary["collection_errors"]],
     ]
     if drift_summary:
-        stats[3:3] = [
+        stats[4:4] = [
             ["Изменения: добавлено / удалено / изменено / переименовано",
              f"{drift_summary['added']} / {drift_summary['removed']} / {drift_summary['modified']} / {drift_summary['renamed']}"],
         ]
@@ -1662,6 +1950,15 @@ def report_blocks(report: dict) -> list[tuple]:
             [p["label"], p["tier"], p["base_policy"] or "—", p["firewalls"], p["rule_collection_groups"], p["rules"], p["threat_intel"], p["idps"] or "—"]
             for p in policies
         ]))
+    nsgs = report["inventory"]["network_security_groups"]
+    if nsgs:
+        blocks.append(("table", ["NSG", "Регион", "Правил", "Подсети", "Сетевых интерфейсов", "Правил с доступом из Интернета", "Состояние"], [
+            [n["label"], n["location"], n["rules"], short_list(n["subnets"], 4), n["network_interfaces"],
+             n["internet_inbound_rules"], n["state"] or "?"]
+            for n in nsgs
+        ]))
+    elif snapshot["network_security_groups"] == 0:
+        blocks.append(("p", "NSG в заданной области не найдены."))
 
     blocks.append(("h2", "Изменения относительно эталона"))
     drift = report["drift"]
@@ -1671,13 +1968,15 @@ def report_blocks(report: dict) -> list[tuple]:
         blocks.append(("p", f"Эталон: {fmt_time(drift['baseline_collected_at'])}, текущий снимок: {fmt_time(drift['current_collected_at'])}."))
         if drift["scope_mismatch"]:
             blocks.append(("p", "Внимание: область сбора эталона и текущего снимка различается — часть объектов может быть отмечена как добавленные или удалённые."))
+        for note in drift.get("notes") or []:
+            blocks.append(("p", note))
         rows = []
         for record in drift["added"]:
             rows.append([record["label"], 1, "Добавлено", KIND_TITLES[record["kind"]], describe_entity(record["kind"], record["data"])])
         for record in drift["removed"]:
             rows.append([record["label"], 2, "Удалено", KIND_TITLES[record["kind"]], describe_entity(record["kind"], record["data"])])
         for record in drift["renamed"]:
-            rows.append([record["label"], 3, "Переименовано", KIND_TITLES[record["kind"]], f"было: {record['old_label']}; {describe_entity('rule', record['data'])}"])
+            rows.append([record["label"], 3, "Переименовано", KIND_TITLES[record["kind"]], f"было: {record['old_label']}; {describe_entity(record['kind'], record['data'])}"])
         for record in drift["modified"]:
             for change in record["changes"]:
                 rows.append([record["label"], 4, "Изменено", KIND_TITLES[record["kind"]], describe_change(change)])
@@ -1695,7 +1994,7 @@ def report_blocks(report: dict) -> list[tuple]:
     activity = report.get("activity_log")
     if activity:
         blocks.append(("h2", "Журнал действий Azure"))
-        blocks.append(("p", f"Операции изменения брандмауэров, политик, IP-групп и диагностики с {fmt_time(activity['from'])} по {fmt_time(activity['to'])}."))
+        blocks.append(("p", f"Операции изменения брандмауэров, политик, IP-групп, NSG и диагностики с {fmt_time(activity['from'])} по {fmt_time(activity['to'])}."))
         if activity.get("events"):
             blocks.append(("table", ["Время", "Кто", "Операция", "Ресурс", "Статус"], [
                 [fmt_time(e["time"]), e["caller"] or "—", e["operation"].split("/", 1)[-1], _short_resource(e["resource_id"]), e["status"]]
@@ -1806,7 +2105,7 @@ def render_html(report: dict) -> str:
         "<!doctype html>",
         '<html lang="ru"><head><meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
-        "<title>Аудит Azure Firewall</title>",
+        "<title>Аудит Azure Firewall и NSG</title>",
         f"<style>{_HTML_STYLE}</style></head><body>",
     ]
     for block in report_blocks(report):
@@ -1887,11 +2186,12 @@ def _subscriptions(args: argparse.Namespace, client: ArmClient) -> list[str]:
 
 def _collect(args: argparse.Namespace, activity_days: int) -> dict:
     client = make_client(args.arm_endpoint, args.timeout)
-    collector = Collector(client, api_version=args.api_version, diagnostics=not args.no_diagnostics)
+    collector = Collector(client, api_version=args.api_version, diagnostics=not args.no_diagnostics, nsg=not args.no_nsg)
     return collector.collect(
         _subscriptions(args, client),
         resource_group=args.resource_group,
         firewall_names=args.firewall,
+        nsg_names=args.nsg,
         all_policies=args.all_policies,
         activity_days=activity_days,
     )
@@ -1933,8 +2233,10 @@ def _write_reports(report: dict, formats: list[str], output_dir: Path, stamp: st
 def cmd_collect(args: argparse.Namespace) -> int:
     snapshot = _collect(args, args.activity_days or 0)
     write_snapshot(Path(args.output), snapshot)
-    log.info("брандмауэров: %d, политик: %d, IP-групп: %d, ошибок: %d",
-             len(snapshot["firewalls"]), len(snapshot["firewall_policies"]), len(snapshot["ip_groups"]), len(snapshot["errors"]))
+    log.info("брандмауэров: %d, политик: %d, IP-групп: %d, NSG: %s, ошибок: %d",
+             len(snapshot["firewalls"]), len(snapshot["firewall_policies"]), len(snapshot["ip_groups"]),
+             "не собирались" if snapshot["network_security_groups"] is None else len(snapshot["network_security_groups"]),
+             len(snapshot["errors"]))
     return EXIT_INCOMPLETE if _incomplete(snapshot) else EXIT_OK
 
 
@@ -1990,6 +2292,8 @@ def build_parser() -> argparse.ArgumentParser:
     group.add_argument("-g", "--resource-group", help="только эта группа ресурсов")
     group.add_argument("-f", "--firewall", action="append", default=[], help="только брандмауэр с этим именем; можно несколько раз")
     group.add_argument("--all-policies", action="store_true", help="также политики, не привязанные к найденным брандмауэрам")
+    group.add_argument("--nsg", action="append", default=[], help="только NSG с этим именем; можно несколько раз")
+    group.add_argument("--no-nsg", action="store_true", help="не читать Network Security Groups")
     group.add_argument("--no-diagnostics", action="store_true", help="не читать параметры диагностики")
     group.add_argument("--activity-days", type=int, default=None,
                        help="читать журнал действий Azure за N дней (0 — не читать; в run по умолчанию — с даты эталона)")
@@ -2008,8 +2312,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="azfw_audit.py",
-        description="Аудит конфигурации Azure Firewall только на чтение: снимок, изменения относительно эталона, "
-                    "отклонения от стандарта, отчёт.",
+        description="Аудит конфигурации Azure Firewall и Network Security Groups только на чтение: снимок, "
+                    "изменения относительно эталона, отклонения от стандарта, отчёт.",
         epilog="Коды выхода: 0 — норма, 1 — ошибка, 2 — сработали --fail-on/--fail-on-drift, "
                "3 — часть конфигурации не прочитана.",
     )

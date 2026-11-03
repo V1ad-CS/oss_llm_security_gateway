@@ -1,4 +1,4 @@
-# Стандарт конфигурации Azure Firewall.
+# Стандарт конфигурации Azure Firewall и Network Security Groups (NSG).
 #
 # azfw_audit.py сравнивает с ним текущую конфигурацию и выводит отклонения в отчёт.
 # Конфигурация в Azure при этом не меняется. Отсутствующие параметры берутся
@@ -49,6 +49,19 @@ public_dnat_allowed_ports: [80, 443]
 # Обозначения «любой адрес». Содержимое IP-групп тоже учитывается.
 any_address_tokens: ["*", "0.0.0.0/0", "0.0.0.0-255.255.255.255", "::/0"]
 
+# --- Network Security Groups ---
+
+# Источники во входящих Allow-правилах NSG, которые означают доступ из Интернета.
+# Порты, закрытые Deny-правилом с более высоким приоритетом, не считаются открытыми.
+nsg_public_sources: ["*", "0.0.0.0/0", "::/0", "Internet"]
+
+# Порты, которые NSG может открывать для Интернета без отклонения
+# (sensitive_ports и max_port_range действуют и для NSG).
+nsg_public_allowed_ports: [80, 443]
+
+# Отмечать NSG, не привязанные ни к подсети, ни к сетевому интерфейсу.
+require_nsg_association: true
+
 # Произвольные требования к свойствам ресурсов: путь в JSON ресурса -> значение.
 # Пути смотрите в снимке (azfw_audit.py collect). Списки сравниваются без учёта порядка.
 expected_properties:
@@ -58,6 +71,9 @@ expected_properties:
   firewall_policy:
     # properties.dnsSettings.enableProxy: true
     # properties.sql.allowSqlRedirect: false
+  network_security_group:
+    # location: "westeurope"
+    # tags.owner: "netops"
 
 # Согласованные исключения. Отклонение, подходящее под исключение, переносится
 # в раздел «Исключения» отчёта. check и object — шаблоны с * и ?, без учёта регистра;
@@ -71,3 +87,6 @@ exceptions:
   # - check: AZFW-CLASSIC
   #   object: "rg-dmz/*"
   #   reason: "Миграция на Firewall Policy запланирована на I квартал"
+  # - check: NSG-PUBLIC-PORT
+  #   object: "rg-app/nsg-snet-web/allow-https-in"
+  #   reason: "Порт 8443 портала согласован, CHG-1061"

@@ -709,10 +709,456 @@
       "type": "Microsoft.Network/IpGroups"
     }
   },
+  "network_security_groups": {
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/rg-app/providers/microsoft.network/networksecuritygroups/nsg-snet-db": {
+      "etag": "W/\"00000032-0000-0000-0000-000000000000\"",
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-db",
+      "location": "westeurope",
+      "name": "nsg-snet-db",
+      "properties": {
+        "defaultSecurityRules": [
+          {
+            "etag": "W/\"00000032-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-db/defaultSecurityRules/AllowVnetInBound",
+            "name": "AllowVnetInBound",
+            "properties": {
+              "access": "Allow",
+              "description": "",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 65000,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "VirtualNetwork",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          },
+          {
+            "etag": "W/\"00000032-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-db/defaultSecurityRules/AllowAzureLoadBalancerInBound",
+            "name": "AllowAzureLoadBalancerInBound",
+            "properties": {
+              "access": "Allow",
+              "description": "",
+              "destinationAddressPrefix": "*",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 65001,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "AzureLoadBalancer",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          },
+          {
+            "etag": "W/\"00000032-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-db/defaultSecurityRules/DenyAllInBound",
+            "name": "DenyAllInBound",
+            "properties": {
+              "access": "Deny",
+              "description": "",
+              "destinationAddressPrefix": "*",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 65500,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "*",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          },
+          {
+            "etag": "W/\"00000032-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-db/defaultSecurityRules/AllowVnetOutBound",
+            "name": "AllowVnetOutBound",
+            "properties": {
+              "access": "Allow",
+              "description": "",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Outbound",
+              "priority": 65000,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "VirtualNetwork",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          },
+          {
+            "etag": "W/\"00000032-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-db/defaultSecurityRules/AllowInternetOutBound",
+            "name": "AllowInternetOutBound",
+            "properties": {
+              "access": "Allow",
+              "description": "",
+              "destinationAddressPrefix": "Internet",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Outbound",
+              "priority": 65001,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "*",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          },
+          {
+            "etag": "W/\"00000032-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-db/defaultSecurityRules/DenyAllOutBound",
+            "name": "DenyAllOutBound",
+            "properties": {
+              "access": "Deny",
+              "description": "",
+              "destinationAddressPrefix": "*",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Outbound",
+              "priority": 65500,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "*",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          }
+        ],
+        "provisioningState": "Succeeded",
+        "resourceGuid": "00000032-1111-2222-3333-444444444444",
+        "securityRules": [
+          {
+            "etag": "W/\"00000033-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-db/securityRules/allow-sql-from-web",
+            "name": "allow-sql-from-web",
+            "properties": {
+              "access": "Allow",
+              "description": "",
+              "destinationAddressPrefix": "10.1.2.0/24",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "1433",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 100,
+              "protocol": "Tcp",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "10.1.1.0/24",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/securityRules"
+          },
+          {
+            "etag": "W/\"00000034-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-db/securityRules/deny-internet-in",
+            "name": "deny-internet-in",
+            "properties": {
+              "access": "Deny",
+              "description": "",
+              "destinationAddressPrefix": "*",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 200,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "Internet",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/securityRules"
+          },
+          {
+            "etag": "W/\"00000035-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-db/securityRules/allow-ssh-vendor",
+            "name": "allow-ssh-vendor",
+            "properties": {
+              "access": "Allow",
+              "description": "Устаревшее правило поставщика",
+              "destinationAddressPrefix": "*",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "22",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 300,
+              "protocol": "Tcp",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "Internet",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/securityRules"
+          }
+        ],
+        "subnets": [
+          {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/virtualNetworks/vnet-app/subnets/snet-db"
+          }
+        ]
+      },
+      "tags": {
+        "owner": "app-team"
+      },
+      "type": "Microsoft.Network/networkSecurityGroups"
+    },
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/rg-app/providers/microsoft.network/networksecuritygroups/nsg-snet-web": {
+      "etag": "W/\"00000028-0000-0000-0000-000000000000\"",
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-web",
+      "location": "westeurope",
+      "name": "nsg-snet-web",
+      "properties": {
+        "defaultSecurityRules": [
+          {
+            "etag": "W/\"00000028-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-web/defaultSecurityRules/AllowVnetInBound",
+            "name": "AllowVnetInBound",
+            "properties": {
+              "access": "Allow",
+              "description": "",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 65000,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "VirtualNetwork",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          },
+          {
+            "etag": "W/\"00000028-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-web/defaultSecurityRules/AllowAzureLoadBalancerInBound",
+            "name": "AllowAzureLoadBalancerInBound",
+            "properties": {
+              "access": "Allow",
+              "description": "",
+              "destinationAddressPrefix": "*",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 65001,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "AzureLoadBalancer",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          },
+          {
+            "etag": "W/\"00000028-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-web/defaultSecurityRules/DenyAllInBound",
+            "name": "DenyAllInBound",
+            "properties": {
+              "access": "Deny",
+              "description": "",
+              "destinationAddressPrefix": "*",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 65500,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "*",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          },
+          {
+            "etag": "W/\"00000028-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-web/defaultSecurityRules/AllowVnetOutBound",
+            "name": "AllowVnetOutBound",
+            "properties": {
+              "access": "Allow",
+              "description": "",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Outbound",
+              "priority": 65000,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "VirtualNetwork",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          },
+          {
+            "etag": "W/\"00000028-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-web/defaultSecurityRules/AllowInternetOutBound",
+            "name": "AllowInternetOutBound",
+            "properties": {
+              "access": "Allow",
+              "description": "",
+              "destinationAddressPrefix": "Internet",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Outbound",
+              "priority": 65001,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "*",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          },
+          {
+            "etag": "W/\"00000028-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-web/defaultSecurityRules/DenyAllOutBound",
+            "name": "DenyAllOutBound",
+            "properties": {
+              "access": "Deny",
+              "description": "",
+              "destinationAddressPrefix": "*",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Outbound",
+              "priority": 65500,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "*",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          }
+        ],
+        "provisioningState": "Succeeded",
+        "resourceGuid": "00000028-1111-2222-3333-444444444444",
+        "securityRules": [
+          {
+            "etag": "W/\"00000029-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-web/securityRules/allow-https-in",
+            "name": "allow-https-in",
+            "properties": {
+              "access": "Allow",
+              "description": "Публичный портал за брандмауэром",
+              "destinationAddressPrefix": "10.1.1.0/24",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "443",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 100,
+              "protocol": "Tcp",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "Internet",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/securityRules"
+          },
+          {
+            "etag": "W/\"0000002a-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-web/securityRules/allow-lb-probe",
+            "name": "allow-lb-probe",
+            "properties": {
+              "access": "Allow",
+              "description": "",
+              "destinationAddressPrefix": "*",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 110,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "AzureLoadBalancer",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/securityRules"
+          },
+          {
+            "etag": "W/\"0000002b-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-web/securityRules/deny-internet-in",
+            "name": "deny-internet-in",
+            "properties": {
+              "access": "Deny",
+              "description": "Остальной входящий трафик из Интернета",
+              "destinationAddressPrefix": "*",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 4000,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "Internet",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/securityRules"
+          }
+        ],
+        "subnets": [
+          {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/virtualNetworks/vnet-app/subnets/snet-web"
+          }
+        ]
+      },
+      "tags": {
+        "owner": "app-team"
+      },
+      "type": "Microsoft.Network/networkSecurityGroups"
+    }
+  },
   "schema_version": 1,
   "scope": {
     "all_policies": false,
     "firewalls": [],
+    "include_nsgs": true,
+    "nsgs": [],
     "resource_group": null,
     "subscriptions": [
       "00000000-0000-0000-0000-000000000000"
@@ -720,6 +1166,6 @@
   },
   "tool": {
     "name": "azfw-audit",
-    "version": "1.0.0"
+    "version": "1.1.0"
   }
 }

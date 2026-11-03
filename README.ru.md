@@ -6,8 +6,8 @@ Open WebUI -> Global Filter -> Security Gateway -> LiteLLM -> Gemini/друга�
 
 Security Gateway не отправляет проверяемые данные во внешние SaaS.
 
-Отдельный инструмент в `azure-firewall-audit/` — аудит конфигурации Azure Firewall только на
-чтение: снимок конфигурации, изменения относительно эталона, отклонения от стандарта и отчёт
+Отдельный инструмент в `azure-firewall-audit/` — аудит конфигурации Azure Firewall и NSG только
+на чтение: снимок конфигурации, изменения относительно эталона, отклонения от стандарта и отчёт
 (см. [azure-firewall-audit/README.md](azure-firewall-audit/README.md)).
 
 ## Что проверяется

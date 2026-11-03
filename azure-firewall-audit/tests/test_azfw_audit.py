@@ -17,6 +17,8 @@ ARM = "https://management.azure.com"
 FW_HUB = f"/subscriptions/{SUB}/resourcegroups/rg-hub-network/providers/microsoft.network/azurefirewalls/fw-hub-weu"
 POL_BASE = f"/subscriptions/{SUB}/resourcegroups/rg-security/providers/microsoft.network/firewallpolicies/fwpol-base-global"
 POL_HUB = f"/subscriptions/{SUB}/resourcegroups/rg-hub-network/providers/microsoft.network/firewallpolicies/fwpol-hub-prod"
+NSG_WEB = f"/subscriptions/{SUB}/resourcegroups/rg-app/providers/microsoft.network/networksecuritygroups/nsg-snet-web"
+NSG_DB = f"/subscriptions/{SUB}/resourcegroups/rg-app/providers/microsoft.network/networksecuritygroups/nsg-snet-db"
 
 
 def load(name):
@@ -93,6 +95,12 @@ def routes_from_snapshot(snapshot):
         routes[group_id] = group
     for firewall_id, settings in snapshot["diagnostic_settings"].items():
         routes[f"{firewall_id}/providers/Microsoft.Insights/diagnosticSettings"] = {"value": settings}
+    nsgs = list(snapshot["network_security_groups"].values())
+    routes[f"/subscriptions/{SUB}/providers/Microsoft.Network/networkSecurityGroups"] = {"value": nsgs}
+    for group in ("rg-app", "rg-hub-network", "rg-dmz"):
+        for resource_type, items in (("networkSecurityGroups", nsgs), ("azureFirewalls", list(snapshot["firewalls"].values()))):
+            in_group = [item for item in items if f"/resourcegroups/{group}/" in item["id"].lower()]
+            routes[f"/subscriptions/{SUB}/resourceGroups/{group}/providers/Microsoft.Network/{resource_type}"] = {"value": in_group}
     return routes
 
 
@@ -185,6 +193,7 @@ def test_collect_reproduces_the_configuration(baseline):
     assert snapshot["firewall_policies"].keys() == {POL_HUB, POL_BASE}  # base policy found via basePolicy
     assert snapshot["ip_groups"].keys() == baseline["ip_groups"].keys()  # found via sourceIpGroups
     assert snapshot["diagnostic_settings"] == baseline["diagnostic_settings"]
+    assert snapshot["network_security_groups"] == baseline["network_security_groups"]
     assert audit.diff_snapshots(baseline, snapshot)["summary"]["total"] == 0
     assert {call["params"]["api-version"] for call in session.calls if call["params"]} <= {
         audit.NETWORK_API_VERSION, audit.DIAGNOSTICS_API_VERSION}
@@ -260,6 +269,7 @@ def test_drift_between_example_snapshots(baseline, current):
     assert {r["label"] for r in drift["added"]} == {
         f"{hub}/rcg-workloads/dnat-published/rdp-jumphost",
         f"{hub}/rcg-workloads/net-allow-workloads/temp-any-any",
+        "rg-app/nsg-snet-web/allow-rdp-temp",
     }
     assert [r["label"] for r in drift["removed"]] == [f"{hub}/rcg-workloads/net-allow-workloads/legacy-ftp"]
     assert [(r["old_label"], r["label"]) for r in drift["renamed"]] == [
@@ -272,12 +282,20 @@ def test_drift_between_example_snapshots(baseline, current):
         (hub, "properties.intrusionDetection.mode"),
         (f"{hub}/rcg-workloads/net-allow-workloads/web-to-sql", "destinationPorts"),
         ("rg-hub-network/ipg-spokes", "properties.ipAddresses"),
+        ("rg-app/nsg-snet-web/allow-https-in", "destinationPortRanges"),
+        ("rg-app/nsg-snet-db", "properties.subnets"),
     }
     assert changes[(hub, "properties.threatIntelMode")] == {"path": "properties.threatIntelMode", "old": "Deny", "new": "Alert"}
     assert changes[("rg-hub-network/ipg-spokes", "properties.ipAddresses")]["added"] == ["10.3.0.0/16"]
+    # allow-https-in moved from destinationPortRange to destinationPortRanges: only 8443 is new.
+    assert changes[("rg-app/nsg-snet-web/allow-https-in", "destinationPortRanges")] == {
+        "path": "destinationPortRanges", "added": ["8443"], "removed": []}
+    assert changes[("rg-app/nsg-snet-db", "properties.subnets")]["removed"] == [
+        f"/subscriptions/{SUB}/resourcegroups/rg-app/providers/microsoft.network/virtualnetworks/vnet-app/subnets/snet-db"]
     # etag, size, provisioningState, changeNumber and reordered lists are not drift.
     assert not drift["scope_mismatch"]
-    assert drift["summary"] == {"added": 2, "removed": 1, "modified": 4, "renamed": 1, "not_compared": 0, "total": 8}
+    assert drift["notes"] == []
+    assert drift["summary"] == {"added": 3, "removed": 1, "modified": 6, "renamed": 1, "not_compared": 0, "total": 11}
 
 
 def test_ids_differing_only_in_case_are_not_drift(baseline):
@@ -315,6 +333,9 @@ def test_findings_on_example_snapshot(current):
         ("AZFW-DNS-PROXY", "medium", "rg-dmz/fw-legacy-dmz"),
         ("AZFW-LOGS", "medium", "rg-dmz/fw-legacy-dmz"),
         ("AZFW-CLASSIC", "low", "rg-dmz/fw-legacy-dmz"),
+        ("NSG-SENSITIVE-PORT", "high", "rg-app/nsg-snet-web/allow-rdp-temp"),
+        ("NSG-PUBLIC-PORT", "medium", "rg-app/nsg-snet-web/allow-https-in"),
+        ("NSG-UNUSED", "info", "rg-app/nsg-snet-db"),
     }
     assert findings[0]["severity"] == "critical"  # most severe first
 
@@ -434,6 +455,148 @@ def test_standard_validation(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Network Security Groups
+# ---------------------------------------------------------------------------
+
+NSG_ID = "/subscriptions/s/resourcegroups/rg/providers/microsoft.network/networksecuritygroups/nsg"
+SUBNET = "/subscriptions/s/resourcegroups/rg/providers/microsoft.network/virtualnetworks/vnet/subnets/snet"
+
+
+def nsg_rule(name, priority, source, ports, access="Allow", direction="Inbound", protocol="Tcp", destination="*", **extra):
+    return {"name": name, "properties": {
+        "priority": priority, "direction": direction, "access": access, "protocol": protocol,
+        "sourceAddressPrefix": source, "sourcePortRange": "*", "destinationAddressPrefix": destination,
+        "destinationPortRanges": ports, **extra,
+    }}
+
+
+def _nsg_snapshot(rules, subnets=(SUBNET,), nics=()):
+    return {
+        "collected_at": "2026-10-27T00:00:00Z", "firewalls": {}, "firewall_policies": {}, "ip_groups": {},
+        "diagnostic_settings": {}, "errors": [],
+        "network_security_groups": {NSG_ID: {"id": NSG_ID, "name": "nsg", "location": "westeurope", "properties": {
+            "securityRules": rules, "subnets": [{"id": i} for i in subnets], "networkInterfaces": [{"id": i} for i in nics],
+        }}},
+    }
+
+
+def _nsg_findings(rules, **kwargs):
+    findings = audit.Auditor(_nsg_snapshot(rules, **kwargs), audit.load_standard(None)).run()
+    return sorted((f["check"], f["severity"], f["object"].rsplit("/", 1)[-1]) for f in findings)
+
+
+def test_nsg_internet_exposure_levels():
+    rules = [
+        nsg_rule("all", 100, "Internet", ["*"]),
+        nsg_rule("rdp", 110, "*", ["3389"]),
+        nsg_rule("wide", 120, "0.0.0.0/0", ["30000-40000"]),  # no sensitive port inside
+        nsg_rule("app", 130, "Internet", ["443", "8443"]),
+        nsg_rule("web", 140, "Internet", ["443"]),
+        nsg_rule("vnet", 150, "VirtualNetwork", ["*"]),
+        nsg_rule("asg", 160, "", ["22"], sourceApplicationSecurityGroups=[{"id": "/subscriptions/s/asg/jump"}]),
+        nsg_rule("ping", 170, "Internet", ["*"], protocol="Icmp"),
+        nsg_rule("out", 180, "*", ["*"], direction="Outbound", destination="Internet"),
+    ]
+    assert _nsg_findings(rules) == [
+        ("NSG-INTERNET-ANY-PORT", "critical", "all"),
+        ("NSG-PUBLIC-PORT", "medium", "app"),
+        ("NSG-SENSITIVE-PORT", "high", "rdp"),
+        ("NSG-WIDE-PORT", "medium", "wide"),
+    ]
+
+
+def test_nsg_deny_with_higher_priority_closes_ports():
+    rules = [
+        nsg_rule("deny-admin", 100, "Internet", ["22", "3389"], access="Deny", protocol="*"),
+        nsg_rule("deny-udp-only", 105, "*", ["*"], access="Deny", protocol="Udp"),  # does not cover TCP
+        nsg_rule("ssh", 110, "Internet", ["22"]),  # fully closed
+        nsg_rule("admin-and-web", 120, "*", ["22", "443", "3389", "8080"]),  # 8080 stays open
+        nsg_rule("deny-later", 200, "Internet", ["*"], access="Deny", protocol="*"),
+        nsg_rule("rdp-before-deny", 150, "Internet", ["3390"]),
+    ]
+    findings = _nsg_findings(rules)
+    assert findings == [("NSG-PUBLIC-PORT", "medium", "admin-and-web"), ("NSG-PUBLIC-PORT", "medium", "rdp-before-deny")]
+    details = {f["object"].rsplit("/", 1)[-1]: f["details"] for f in audit.Auditor(_nsg_snapshot(rules), audit.load_standard(None)).run()}
+    assert details["admin-and-web"].startswith("Из Интернета доступны порты 8080;")
+
+
+def test_unattached_nsg_and_rule_descriptions():
+    assert _nsg_findings([], subnets=()) == [("NSG-UNUSED", "info", "nsg")]
+    assert _nsg_findings([], subnets=(), nics=("/subscriptions/s/nic",)) == []
+    standard = audit.load_standard(None)
+    standard["require_rule_description"] = True
+    findings = audit.Auditor(_nsg_snapshot([nsg_rule("x", 100, "10.0.0.0/8", ["22"])]), standard).run()
+    assert [(f["check"], f["object"]) for f in findings] == [("AZFW-NO-DESC", "rg/nsg/x")]
+
+
+def test_subtract_ports():
+    assert audit.subtract_ports([(0, 65535)], [(22, 22), (3389, 3389)]) == [(0, 21), (23, 3388), (3390, 65535)]
+    assert audit.subtract_ports([(80, 90)], [(0, 65535)]) == []
+    assert audit.fmt_port_ranges([(0, 65535), (22, 22), (80, 90)]) == ["*", "22", "80-90"]
+
+
+def test_nsg_rule_spelling_and_scale_set_nics_are_not_drift():
+    single = _nsg_snapshot([nsg_rule("web", 100, "Internet", ["443"], destinationPortRange="443")])
+    single["network_security_groups"][NSG_ID]["properties"]["securityRules"][0]["properties"].pop("destinationPortRanges")
+    plural = _nsg_snapshot(
+        [{"name": "web", "properties": {
+            "priority": 100, "direction": "Inbound", "access": "Allow", "protocol": "Tcp",
+            "sourceAddressPrefixes": ["Internet"], "sourcePortRanges": ["*"], "destinationAddressPrefixes": ["*"],
+            "destinationPortRanges": ["443"], "provisioningState": "Succeeded"}}],
+        nics=("/subscriptions/s/resourcegroups/rg/providers/microsoft.compute/virtualmachinescalesets/vmss/virtualmachines/3/networkinterfaces/nic",),
+    )
+    assert audit.diff_snapshots(single, plural)["summary"]["total"] == 0
+
+
+def test_snapshot_without_nsgs_skips_the_section(baseline, current):
+    old = copy.deepcopy(baseline)
+    del old["network_security_groups"]  # snapshot of a version that did not collect NSGs
+    drift = audit.diff_snapshots(old, current)
+    assert drift["notes"] == ["NSG не сравнивались: в эталоне они не собирались."]
+    assert not [r for r in drift["added"] + drift["not_compared"] if r["kind"].startswith(("network_security", "security_rule"))]
+    assert drift["summary"]["total"] == 8  # the firewall changes are still found
+
+    report = audit.build_report(old)
+    assert report["snapshot"]["network_security_groups"] is None
+    assert "| NSG | не собирались |" in audit.render_markdown(report)
+
+
+def test_failed_nsg_listing_hides_only_nsgs(baseline):
+    routes = routes_from_snapshot(baseline)
+    routes[f"/subscriptions/{SUB}/providers/Microsoft.Network/networkSecurityGroups"] = FakeResponse(
+        403, {"error": {"code": "AuthorizationFailed", "message": "denied"}})
+    client, _ = make_client(routes)
+    snapshot = audit.Collector(client).collect([SUB])
+    assert snapshot["errors"][0]["kinds"] == list(audit.NSG_KINDS)
+
+    drift = audit.diff_snapshots(baseline, snapshot)
+    assert drift["summary"]["total"] == 0
+    assert drift["removed"] == []
+    assert {r["kind"] for r in drift["not_compared"]} == {"network_security_group", "security_rule"}
+
+
+def test_nsg_filter_and_switch(baseline):
+    client, _ = make_client(routes_from_snapshot(baseline))
+    snapshot = audit.Collector(client).collect([SUB], resource_group="rg-app", nsg_names=["nsg-snet-web", "nsg-gone"])
+    assert list(snapshot["network_security_groups"]) == [NSG_WEB]
+    assert [(e["scope"], e["incomplete"]) for e in snapshot["errors"]] == [("networksecuritygroups/nsg-gone", False)]
+
+    snapshot = audit.Collector(client, nsg=False).collect([SUB])
+    assert snapshot["network_security_groups"] is None
+    assert snapshot["scope"]["include_nsgs"] is False
+
+
+def test_activity_log_keeps_nsg_and_subnet_changes():
+    event = {"eventTimestamp": "2026-10-20T10:00:00Z", "caller": "a@example.com", "correlationId": "1", "status": {"value": "Succeeded"}}
+    rows = [audit._activity_row({**event, "operationName": {"value": op}, "resourceId": "/x"}) for op in (
+        "Microsoft.Network/networkSecurityGroups/securityRules/write",
+        "Microsoft.Network/virtualNetworks/subnets/write",
+        "Microsoft.Network/virtualNetworks/write",
+    )]
+    assert [row is not None for row in rows] == [True, True, False]
+
+
+# ---------------------------------------------------------------------------
 # Report and command line
 # ---------------------------------------------------------------------------
 
@@ -460,7 +623,7 @@ def test_report_command_writes_all_formats(tmp_path):
     assert names == ["azfw-report-20261027T080000Z.html", "azfw-report-20261027T080000Z.json", "azfw-report-20261027T080000Z.md"]
     report = json.loads((tmp_path / names[1]).read_text(encoding="utf-8"))
     assert report["summary"]["findings_by_severity"]["critical"] == 1
-    assert report["summary"]["drift"]["total"] == 8
+    assert report["summary"]["drift"]["total"] == 11
     markdown = (tmp_path / names[2]).read_text(encoding="utf-8")
     assert "## Изменения относительно эталона" in markdown
     assert "contractor@example.com" in markdown
