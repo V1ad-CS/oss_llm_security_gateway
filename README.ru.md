@@ -8,7 +8,8 @@ Security Gateway не отправляет проверяемые данные �
 
 Отдельный инструмент в `azure-firewall-audit/` — аудит конфигурации Azure Firewall и NSG только
 на чтение: снимок конфигурации, изменения относительно эталона, отклонения от стандарта и отчёт
-(см. [azure-firewall-audit/README.md](azure-firewall-audit/README.md)).
+(см. [azure-firewall-audit/README.md](azure-firewall-audit/README.md)). Требования и описание
+решения — в `azure-firewall-audit/docs/`, версии в формате Word — в `docs/`.
 
 ## Что проверяется
 

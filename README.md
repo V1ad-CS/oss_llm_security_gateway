@@ -25,7 +25,7 @@ If a request violates the configured security policy, the gateway returns HTTP 4
 
 Russian notes: [README.ru.md](README.ru.md). List of fixes: [CHANGELOG.md](CHANGELOG.md).
 
-The repository also contains [azure-firewall-audit](azure-firewall-audit/README.md) (documented in Russian): a read-only script that collects Azure Firewall and Network Security Group configuration, reports drift from an approved baseline and deviations from a security standard, and never changes anything in Azure.
+The repository also contains [azure-firewall-audit](azure-firewall-audit/README.md) (documented in Russian, with requirements and an administrator guide in `azure-firewall-audit/docs/` and Word versions in `docs/`): a read-only script that collects Azure Firewall and Network Security Group configuration, reports drift from an approved baseline and deviations from a security standard, and never changes anything in Azure.
 
 ## Why this project exists
 

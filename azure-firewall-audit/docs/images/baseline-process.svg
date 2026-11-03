@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="450" viewBox="0 0 960 450" font-family="Arial, 'Liberation Sans', sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4B5563"/>
+    </marker>
+  </defs>
+  <rect width="960" height="450" fill="#FFFFFF"/>
+
+  <!-- Return path: every outcome leads to the next scheduled run -->
+  <path d="M164,292 L164,318 M470,292 L470,318 M790,292 L790,318 M790,318 L12,318 L12,16 L367,16 L367,36"
+        fill="none" stroke="#6B7280" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
+  <text x="480" y="342" text-anchor="middle" font-size="14" fill="#374151">следующий запуск run сравнивает конфигурацию с действующим эталоном</text>
+
+  <!-- Steps -->
+  <g text-anchor="middle">
+    <rect x="28" y="40" width="206" height="110" rx="12" fill="#EEF4FB" stroke="#2F5D9F" stroke-width="2.5"/>
+    <text x="131" y="70" font-size="17" font-weight="bold" fill="#1F3864">1. Эталон</text>
+    <text x="131" y="96" font-size="14" fill="#111827">collect, отчёт по снимку,</text>
+    <text x="131" y="116" font-size="14" fill="#111827">проверка и утверждение</text>
+
+    <rect x="264" y="40" width="206" height="110" rx="12" fill="#EEF4FB" stroke="#2F5D9F" stroke-width="2.5"/>
+    <text x="367" y="70" font-size="17" font-weight="bold" fill="#1F3864">2. Регулярный run</text>
+    <text x="367" y="96" font-size="14" fill="#111827">по расписанию:</text>
+    <text x="367" y="116" font-size="14" fill="#111827">--fail-on high</text>
+    <text x="367" y="136" font-size="14" fill="#111827">--fail-on-drift</text>
+
+    <rect x="500" y="40" width="206" height="110" rx="12" fill="#EEF4FB" stroke="#2F5D9F" stroke-width="2.5"/>
+    <text x="603" y="70" font-size="17" font-weight="bold" fill="#1F3864">3. Разбор отчёта</text>
+    <text x="603" y="96" font-size="14" fill="#111827">изменения сверяются</text>
+    <text x="603" y="116" font-size="14" fill="#111827">с заявками; кто менял —</text>
+    <text x="603" y="136" font-size="14" fill="#111827">по журналу действий</text>
+
+    <rect x="736" y="40" width="208" height="110" rx="12" fill="#FDF6E9" stroke="#B7791F" stroke-width="2.5"/>
+    <text x="840" y="70" font-size="17" font-weight="bold" fill="#7A4A0B">4. Решение</text>
+    <text x="840" y="96" font-size="14" fill="#111827">по каждому изменению</text>
+    <text x="840" y="116" font-size="14" fill="#111827">и отклонению</text>
+  </g>
+  <g stroke="#4B5563" stroke-width="2.5" marker-end="url(#arrow)">
+    <line x1="234" y1="95" x2="260" y2="95"/>
+    <line x1="470" y1="95" x2="496" y2="95"/>
+    <line x1="706" y1="95" x2="732" y2="95"/>
+  </g>
+
+  <!-- Bus to the outcomes -->
+  <path d="M840,150 L840,172 L164,172" fill="none" stroke="#4B5563" stroke-width="2.5"/>
+  <g stroke="#4B5563" stroke-width="2.5" marker-end="url(#arrow)">
+    <line x1="164" y1="172" x2="164" y2="192"/>
+    <line x1="470" y1="172" x2="470" y2="192"/>
+    <line x1="790" y1="172" x2="790" y2="192"/>
+  </g>
+
+  <!-- Outcomes -->
+  <g text-anchor="middle">
+    <rect x="28" y="196" width="272" height="96" rx="12" fill="#EEF7F1" stroke="#2E7D4F" stroke-width="2.5"/>
+    <text x="164" y="224" font-size="16" font-weight="bold" fill="#1E5631">Согласованное изменение</text>
+    <text x="164" y="250" font-size="14" fill="#111827">снимок из reports/ становится</text>
+    <text x="164" y="270" font-size="14" fill="#111827">новым эталоном (через ревью)</text>
+
+    <rect x="334" y="196" width="272" height="96" rx="12" fill="#FDECEC" stroke="#C0392B" stroke-width="2"/>
+    <text x="470" y="224" font-size="16" font-weight="bold" fill="#B42318">Несогласованное изменение</text>
+    <text x="470" y="250" font-size="14" fill="#7F1D1D">инцидент: откат из IaC,</text>
+    <text x="470" y="270" font-size="14" fill="#7F1D1D">разбор по журналу действий</text>
+
+    <rect x="640" y="196" width="304" height="96" rx="12" fill="#FDF6E9" stroke="#B7791F" stroke-width="2.5"/>
+    <text x="792" y="224" font-size="16" font-weight="bold" fill="#7A4A0B">Отклонение от стандарта</text>
+    <text x="792" y="250" font-size="14" fill="#111827">устранить через IaC или оформить</text>
+    <text x="792" y="270" font-size="14" fill="#111827">исключение с основанием и сроком</text>
+  </g>
+
+  <!-- Note -->
+  <rect x="28" y="366" width="916" height="68" rx="10" fill="#F3F4F6" stroke="#D1D5DB" stroke-width="1.5"/>
+  <text x="44" y="394" font-size="14" fill="#111827">Скрипт только читает конфигурацию. Исправления, откат и замену эталона выполняют люди</text>
+  <text x="44" y="416" font-size="14" fill="#111827">по процессу управления изменениями: через IaC-шаблоны и ревью в репозитории.</text>
+</svg>

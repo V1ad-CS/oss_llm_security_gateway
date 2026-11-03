@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="900" viewBox="0 0 960 900" font-family="Arial, 'Liberation Sans', sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4B5563"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#B42318"/>
+    </marker>
+  </defs>
+  <rect width="960" height="900" fill="#FFFFFF"/>
+
+  <!-- Azure Resource Manager -->
+  <rect x="150" y="16" width="440" height="80" rx="12" fill="#F3F4F6" stroke="#6B7280" stroke-width="2"/>
+  <text x="370" y="52" text-anchor="middle" font-size="24" font-weight="bold" fill="#111827">Azure Resource Manager</text>
+  <text x="370" y="80" text-anchor="middle" font-size="16" fill="#374151">management.azure.com · учётная запись с ролью Reader</text>
+
+  <line x1="370" y1="96" x2="370" y2="134" stroke="#4B5563" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="384" y="122" font-size="16" font-weight="bold" fill="#1E7B45">только GET</text>
+
+  <!-- Collect -->
+  <rect x="40" y="138" width="660" height="230" rx="14" fill="#EEF4FB" stroke="#2F5D9F" stroke-width="2.5"/>
+  <text x="62" y="172" font-size="22" font-weight="bold" fill="#1F3864">Сбор конфигурации — collect</text>
+  <text x="62" y="198" font-size="15" fill="#374151">постранично, с повторами при ответах 429 и 5xx</text>
+  <g font-size="15" fill="#111827" text-anchor="middle">
+    <rect x="62" y="214" width="300" height="40" rx="8" fill="#FFFFFF" stroke="#A9BEE0" stroke-width="1.5"/>
+    <text x="212" y="239">Azure Firewall и классические правила</text>
+    <rect x="378" y="214" width="300" height="40" rx="8" fill="#FFFFFF" stroke="#A9BEE0" stroke-width="1.5"/>
+    <text x="528" y="239">Firewall Policy и базовые политики</text>
+    <rect x="62" y="264" width="300" height="40" rx="8" fill="#FFFFFF" stroke="#A9BEE0" stroke-width="1.5"/>
+    <text x="212" y="289">Группы коллекций правил</text>
+    <rect x="378" y="264" width="300" height="40" rx="8" fill="#FFFFFF" stroke="#A9BEE0" stroke-width="1.5"/>
+    <text x="528" y="289">IP-группы из правил</text>
+    <rect x="62" y="314" width="300" height="40" rx="8" fill="#FFFFFF" stroke="#A9BEE0" stroke-width="1.5"/>
+    <text x="212" y="339">NSG: правила и привязки к подсетям</text>
+    <rect x="378" y="314" width="300" height="40" rx="8" fill="#FFFFFF" stroke="#A9BEE0" stroke-width="1.5"/>
+    <text x="528" y="339">Диагностика · журнал действий</text>
+  </g>
+
+  <!-- Writes blocked -->
+  <line x1="700" y1="253" x2="742" y2="253" stroke="#B42318" stroke-width="2.5" marker-end="url(#arrow-red)"/>
+  <rect x="746" y="188" width="198" height="130" rx="12" fill="#FDECEC" stroke="#C0392B" stroke-width="2"/>
+  <text x="845" y="222" text-anchor="middle" font-size="18" font-weight="bold" fill="#B42318">ЗАПИСЬ</text>
+  <text x="845" y="248" text-anchor="middle" font-size="15" fill="#7F1D1D">POST · PUT</text>
+  <text x="845" y="268" text-anchor="middle" font-size="15" fill="#7F1D1D">PATCH · DELETE</text>
+  <text x="845" y="294" text-anchor="middle" font-size="14" fill="#7F1D1D">блокируется до отправки</text>
+
+  <line x1="370" y1="368" x2="370" y2="402" stroke="#4B5563" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <!-- Snapshot -->
+  <rect x="150" y="406" width="440" height="76" rx="12" fill="#F3F4F6" stroke="#6B7280" stroke-width="2"/>
+  <text x="370" y="438" text-anchor="middle" font-size="21" font-weight="bold" fill="#111827">Снимок конфигурации · JSON</text>
+  <text x="370" y="464" text-anchor="middle" font-size="15" fill="#374151">утверждённый снимок становится эталоном</text>
+
+  <path d="M290,482 L290,500 L215,500 L215,524" fill="none" stroke="#4B5563" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <path d="M450,482 L450,500 L555,500 L555,524" fill="none" stroke="#4B5563" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <!-- Drift -->
+  <rect x="40" y="528" width="350" height="210" rx="14" fill="#EEF7F1" stroke="#2E7D4F" stroke-width="2.5"/>
+  <text x="60" y="560" font-size="20" font-weight="bold" fill="#1E5631">Сравнение с эталоном</text>
+  <text x="60" y="584" font-size="15" fill="#374151">вход: эталонный снимок (--baseline)</text>
+  <g font-size="14.5" fill="#111827">
+    <rect x="60" y="598" width="310" height="36" rx="8" fill="#FFFFFF" stroke="#A7D3B5" stroke-width="1.5"/>
+    <text x="74" y="621">добавлено · удалено · изменено</text>
+    <rect x="60" y="642" width="310" height="36" rx="8" fill="#FFFFFF" stroke="#A7D3B5" stroke-width="1.5"/>
+    <text x="74" y="665">переименования; поля: было → стало</text>
+    <rect x="60" y="686" width="310" height="36" rx="8" fill="#FFFFFF" stroke="#A7D3B5" stroke-width="1.5"/>
+    <text x="74" y="709">не прочитанное — «не сравнивались»</text>
+  </g>
+
+  <!-- Standard -->
+  <rect x="410" y="528" width="290" height="210" rx="14" fill="#FDF6E9" stroke="#B7791F" stroke-width="2.5"/>
+  <text x="430" y="560" font-size="20" font-weight="bold" fill="#7A4A0B">Проверка по стандарту</text>
+  <text x="430" y="584" font-size="15" fill="#374151">вход: standard.yaml</text>
+  <g font-size="14.5" fill="#111827">
+    <rect x="430" y="598" width="250" height="36" rx="8" fill="#FFFFFF" stroke="#E8C98A" stroke-width="1.5"/>
+    <text x="444" y="621">настройки брандмауэров</text>
+    <rect x="430" y="642" width="250" height="36" rx="8" fill="#FFFFFF" stroke="#E8C98A" stroke-width="1.5"/>
+    <text x="444" y="665">правила: «любой», порты, FQDN</text>
+    <rect x="430" y="686" width="250" height="36" rx="8" fill="#FFFFFF" stroke="#E8C98A" stroke-width="1.5"/>
+    <text x="444" y="709">NSG: доступ из Интернета</text>
+  </g>
+
+  <!-- Activity log side note -->
+  <rect x="746" y="560" width="198" height="146" rx="12" fill="#F3F4F6" stroke="#6B7280" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="845" y="592" text-anchor="middle" font-size="16" font-weight="bold" fill="#111827">Исключения</text>
+  <text x="845" y="618" text-anchor="middle" font-size="14" fill="#374151">согласованные</text>
+  <text x="845" y="638" text-anchor="middle" font-size="14" fill="#374151">отклонения с основанием</text>
+  <text x="845" y="658" text-anchor="middle" font-size="14" fill="#374151">и сроком — отдельным</text>
+  <text x="845" y="678" text-anchor="middle" font-size="14" fill="#374151">разделом отчёта</text>
+  <line x1="742" y1="633" x2="704" y2="633" stroke="#4B5563" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+
+  <path d="M215,738 L215,760 L330,760 L330,784" fill="none" stroke="#4B5563" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <path d="M555,738 L555,760 L410,760 L410,784" fill="none" stroke="#4B5563" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <!-- Report -->
+  <rect x="150" y="788" width="440" height="96" rx="12" fill="#F3F4F6" stroke="#6B7280" stroke-width="2"/>
+  <text x="370" y="822" text-anchor="middle" font-size="21" font-weight="bold" fill="#111827">Отчёт · Markdown · HTML · JSON</text>
+  <text x="370" y="848" text-anchor="middle" font-size="15" fill="#374151">сводка, инвентаризация, изменения, отклонения,</text>
+  <text x="370" y="870" text-anchor="middle" font-size="15" fill="#374151">рекомендации; код выхода 0 · 1 · 2 · 3 для CI</text>
+</svg>
