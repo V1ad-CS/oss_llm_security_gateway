@@ -1,0 +1,1215 @@
+{
+  "activity_log": null,
+  "api_versions": {
+    "diagnostics": "2021-05-01-preview",
+    "network": "2024-05-01"
+  },
+  "arm_endpoint": "https://management.azure.com",
+  "collected_at": "2026-10-21T08:00:00Z",
+  "diagnostic_settings": {
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/rg-dmz/providers/microsoft.network/azurefirewalls/fw-legacy-dmz": [],
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/rg-hub-network/providers/microsoft.network/azurefirewalls/fw-hub-weu": [
+      {
+        "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-network/providers/Microsoft.Network/azureFirewalls/fw-hub-weu/providers/microsoft.insights/diagnosticSettings/to-law-security",
+        "name": "to-law-security",
+        "properties": {
+          "logAnalyticsDestinationType": "Dedicated",
+          "logs": [
+            {
+              "category": null,
+              "categoryGroup": "allLogs",
+              "enabled": true
+            }
+          ],
+          "metrics": [
+            {
+              "category": "AllMetrics",
+              "enabled": true
+            }
+          ],
+          "workspaceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-monitoring/providers/Microsoft.OperationalInsights/workspaces/law-security"
+        },
+        "type": "Microsoft.Insights/diagnosticSettings"
+      }
+    ]
+  },
+  "errors": [],
+  "firewall_policies": {
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/rg-hub-network/providers/microsoft.network/firewallpolicies/fwpol-hub-prod": {
+      "resource": {
+        "etag": "W/\"f0000014-0000-0000-0000-000000000000\"",
+        "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-network/providers/Microsoft.Network/firewallPolicies/fwpol-hub-prod",
+        "location": "westeurope",
+        "name": "fwpol-hub-prod",
+        "properties": {
+          "basePolicy": {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-security/providers/Microsoft.Network/firewallPolicies/fwpol-base-global"
+          },
+          "childPolicies": [],
+          "dnsSettings": {
+            "enableProxy": true,
+            "servers": []
+          },
+          "firewalls": [
+            {
+              "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-network/providers/Microsoft.Network/azureFirewalls/fw-hub-weu"
+            }
+          ],
+          "insights": {
+            "isEnabled": true,
+            "retentionDays": 30
+          },
+          "intrusionDetection": {
+            "configuration": {
+              "bypassTrafficSettings": [],
+              "privateRanges": [],
+              "signatureOverrides": []
+            },
+            "mode": "Alert",
+            "profile": "Standard"
+          },
+          "provisioningState": "Succeeded",
+          "ruleCollectionGroups": [
+            {
+              "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-network/providers/Microsoft.Network/firewallPolicies/fwpol-hub-prod/ruleCollectionGroups/rcg-platform"
+            },
+            {
+              "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-network/providers/Microsoft.Network/firewallPolicies/fwpol-hub-prod/ruleCollectionGroups/rcg-workloads"
+            }
+          ],
+          "size": "0.03 MB",
+          "sku": {
+            "tier": "Premium"
+          },
+          "threatIntelMode": "Alert",
+          "threatIntelWhitelist": {
+            "fqdns": [],
+            "ipAddresses": []
+          },
+          "transportSecurity": {
+            "certificateAuthority": {
+              "keyVaultSecretId": "https://kv-fw-certs.vault.azure.net/secrets/fw-intermediate-ca",
+              "name": "fw-intermediate-ca"
+            }
+          }
+        },
+        "tags": {},
+        "type": "Microsoft.Network/FirewallPolicies"
+      },
+      "rule_collection_groups": [
+        {
+          "etag": "W/\"f0000015-0000-0000-0000-000000000000\"",
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-network/providers/Microsoft.Network/firewallPolicies/fwpol-hub-prod/ruleCollectionGroups/rcg-platform",
+          "name": "rcg-platform",
+          "properties": {
+            "priority": 200,
+            "provisioningState": "Succeeded",
+            "ruleCollections": [
+              {
+                "action": {
+                  "type": "Allow"
+                },
+                "name": "net-allow-core",
+                "priority": 1000,
+                "ruleCollectionType": "FirewallPolicyFilterRuleCollection",
+                "rules": [
+                  {
+                    "description": "DNS Azure",
+                    "destinationAddresses": [
+                      "168.63.129.16"
+                    ],
+                    "destinationFqdns": [],
+                    "destinationIpGroups": [],
+                    "destinationPorts": [
+                      "53"
+                    ],
+                    "ipProtocols": [
+                      "UDP",
+                      "TCP"
+                    ],
+                    "name": "dns-azure",
+                    "ruleType": "NetworkRule",
+                    "sourceAddresses": [],
+                    "sourceIpGroups": [
+                      "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-network/providers/Microsoft.Network/ipGroups/ipg-spokes"
+                    ]
+                  },
+                  {
+                    "description": "Время",
+                    "destinationAddresses": [],
+                    "destinationFqdns": [
+                      "time.windows.com"
+                    ],
+                    "destinationIpGroups": [],
+                    "destinationPorts": [
+                      "123"
+                    ],
+                    "ipProtocols": [
+                      "UDP"
+                    ],
+                    "name": "ntp",
+                    "ruleType": "NetworkRule",
+                    "sourceAddresses": [],
+                    "sourceIpGroups": [
+                      "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-network/providers/Microsoft.Network/ipGroups/ipg-spokes"
+                    ]
+                  },
+                  {
+                    "description": "Контроллеры домена",
+                    "destinationAddresses": [
+                      "10.0.10.5",
+                      "10.0.10.4"
+                    ],
+                    "destinationFqdns": [],
+                    "destinationIpGroups": [],
+                    "destinationPorts": [
+                      "53",
+                      "88",
+                      "389",
+                      "636",
+                      "3268-3269"
+                    ],
+                    "ipProtocols": [
+                      "TCP",
+                      "UDP"
+                    ],
+                    "name": "ad-ds",
+                    "ruleType": "NetworkRule",
+                    "sourceAddresses": [],
+                    "sourceIpGroups": [
+                      "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-network/providers/Microsoft.Network/ipGroups/ipg-spokes"
+                    ]
+                  }
+                ]
+              },
+              {
+                "action": {
+                  "type": "Allow"
+                },
+                "name": "app-allow-updates",
+                "priority": 1100,
+                "ruleCollectionType": "FirewallPolicyFilterRuleCollection",
+                "rules": [
+                  {
+                    "description": "Обновления Windows",
+                    "destinationAddresses": [],
+                    "fqdnTags": [
+                      "WindowsUpdate"
+                    ],
+                    "httpHeadersToInsert": [],
+                    "name": "windows-update",
+                    "protocols": [
+                      {
+                        "port": 80,
+                        "protocolType": "Http"
+                      },
+                      {
+                        "port": 443,
+                        "protocolType": "Https"
+                      }
+                    ],
+                    "ruleType": "ApplicationRule",
+                    "sourceAddresses": [],
+                    "sourceIpGroups": [
+                      "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-network/providers/Microsoft.Network/ipGroups/ipg-spokes"
+                    ],
+                    "targetFqdns": [],
+                    "targetUrls": [],
+                    "terminateTLS": false,
+                    "webCategories": []
+                  },
+                  {
+                    "description": "Сервисы Microsoft",
+                    "destinationAddresses": [],
+                    "fqdnTags": [],
+                    "httpHeadersToInsert": [],
+                    "name": "ms-services",
+                    "protocols": [
+                      {
+                        "port": 443,
+                        "protocolType": "Https"
+                      }
+                    ],
+                    "ruleType": "ApplicationRule",
+                    "sourceAddresses": [],
+                    "sourceIpGroups": [
+                      "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-network/providers/Microsoft.Network/ipGroups/ipg-spokes"
+                    ],
+                    "targetFqdns": [
+                      "*.microsoft.com",
+                      "*.windows.net"
+                    ],
+                    "targetUrls": [],
+                    "terminateTLS": false,
+                    "webCategories": []
+                  }
+                ]
+              }
+            ],
+            "size": "0.01 MB"
+          },
+          "type": "Microsoft.Network/FirewallPolicies/RuleCollectionGroups"
+        },
+        {
+          "etag": "W/\"f000001f-0000-0000-0000-000000000000\"",
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-network/providers/Microsoft.Network/firewallPolicies/fwpol-hub-prod/ruleCollectionGroups/rcg-workloads",
+          "name": "rcg-workloads",
+          "properties": {
+            "priority": 300,
+            "provisioningState": "Succeeded",
+            "ruleCollections": [
+              {
+                "action": {
+                  "type": "DNAT"
+                },
+                "name": "dnat-published",
+                "priority": 100,
+                "ruleCollectionType": "FirewallPolicyNatRuleCollection",
+                "rules": [
+                  {
+                    "description": "Публичный портал",
+                    "destinationAddresses": [
+                      "203.0.113.10"
+                    ],
+                    "destinationPorts": [
+                      "443"
+                    ],
+                    "ipProtocols": [
+                      "TCP"
+                    ],
+                    "name": "https-portal",
+                    "ruleType": "NatRule",
+                    "sourceAddresses": [
+                      "*"
+                    ],
+                    "sourceIpGroups": [],
+                    "translatedAddress": "10.1.1.10",
+                    "translatedPort": "443"
+                  },
+                  {
+                    "description": "Временный доступ подрядчика",
+                    "destinationAddresses": [
+                      "203.0.113.10"
+                    ],
+                    "destinationPorts": [
+                      "3389"
+                    ],
+                    "ipProtocols": [
+                      "TCP"
+                    ],
+                    "name": "rdp-jumphost",
+                    "ruleType": "NatRule",
+                    "sourceAddresses": [
+                      "*"
+                    ],
+                    "sourceIpGroups": [],
+                    "translatedAddress": "10.1.3.4",
+                    "translatedPort": "3389"
+                  }
+                ]
+              },
+              {
+                "action": {
+                  "type": "Allow"
+                },
+                "name": "net-allow-workloads",
+                "priority": 2000,
+                "ruleCollectionType": "FirewallPolicyFilterRuleCollection",
+                "rules": [
+                  {
+                    "description": "Веб → SQL, CHG-0815",
+                    "destinationAddresses": [
+                      "10.1.2.0/24"
+                    ],
+                    "destinationFqdns": [],
+                    "destinationIpGroups": [],
+                    "destinationPorts": [
+                      "1433",
+                      "1434"
+                    ],
+                    "ipProtocols": [
+                      "TCP"
+                    ],
+                    "name": "web-to-sql",
+                    "ruleType": "NetworkRule",
+                    "sourceAddresses": [
+                      "10.1.1.0/24"
+                    ],
+                    "sourceIpGroups": []
+                  },
+                  {
+                    "description": "Диагностика INC-7731",
+                    "destinationAddresses": [
+                      "*"
+                    ],
+                    "destinationFqdns": [],
+                    "destinationIpGroups": [],
+                    "destinationPorts": [
+                      "*"
+                    ],
+                    "ipProtocols": [
+                      "Any"
+                    ],
+                    "name": "temp-any-any",
+                    "ruleType": "NetworkRule",
+                    "sourceAddresses": [
+                      "*"
+                    ],
+                    "sourceIpGroups": []
+                  }
+                ]
+              },
+              {
+                "action": {
+                  "type": "Allow"
+                },
+                "name": "app-allow-saas",
+                "priority": 2100,
+                "ruleCollectionType": "FirewallPolicyFilterRuleCollection",
+                "rules": [
+                  {
+                    "description": "Разработка",
+                    "destinationAddresses": [],
+                    "fqdnTags": [],
+                    "httpHeadersToInsert": [],
+                    "name": "github-com",
+                    "protocols": [
+                      {
+                        "port": 443,
+                        "protocolType": "Https"
+                      }
+                    ],
+                    "ruleType": "ApplicationRule",
+                    "sourceAddresses": [
+                      "10.1.0.0/16"
+                    ],
+                    "sourceIpGroups": [],
+                    "targetFqdns": [
+                      "github.com",
+                      "*.github.com"
+                    ],
+                    "targetUrls": [],
+                    "terminateTLS": false,
+                    "webCategories": []
+                  }
+                ]
+              }
+            ],
+            "size": "0.01 MB"
+          },
+          "type": "Microsoft.Network/FirewallPolicies/RuleCollectionGroups"
+        }
+      ]
+    },
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/rg-security/providers/microsoft.network/firewallpolicies/fwpol-base-global": {
+      "resource": {
+        "etag": "W/\"f000000a-0000-0000-0000-000000000000\"",
+        "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-security/providers/Microsoft.Network/firewallPolicies/fwpol-base-global",
+        "location": "westeurope",
+        "name": "fwpol-base-global",
+        "properties": {
+          "childPolicies": [],
+          "firewalls": [],
+          "provisioningState": "Succeeded",
+          "ruleCollectionGroups": [
+            {
+              "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-security/providers/Microsoft.Network/firewallPolicies/fwpol-base-global/ruleCollectionGroups/rcg-global-deny"
+            }
+          ],
+          "size": "0.02 MB",
+          "sku": {
+            "tier": "Premium"
+          },
+          "threatIntelMode": "Alert",
+          "threatIntelWhitelist": {
+            "fqdns": [],
+            "ipAddresses": []
+          }
+        },
+        "tags": {},
+        "type": "Microsoft.Network/FirewallPolicies"
+      },
+      "rule_collection_groups": [
+        {
+          "etag": "W/\"f000000b-0000-0000-0000-000000000000\"",
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-security/providers/Microsoft.Network/firewallPolicies/fwpol-base-global/ruleCollectionGroups/rcg-global-deny",
+          "name": "rcg-global-deny",
+          "properties": {
+            "priority": 100,
+            "provisioningState": "Succeeded",
+            "ruleCollections": [
+              {
+                "action": {
+                  "type": "Deny"
+                },
+                "name": "net-deny-internet-smb",
+                "priority": 100,
+                "ruleCollectionType": "FirewallPolicyFilterRuleCollection",
+                "rules": [
+                  {
+                    "description": "SMB в Интернет запрещён",
+                    "destinationAddresses": [
+                      "Internet"
+                    ],
+                    "destinationFqdns": [],
+                    "destinationIpGroups": [],
+                    "destinationPorts": [
+                      "445"
+                    ],
+                    "ipProtocols": [
+                      "TCP"
+                    ],
+                    "name": "deny-smb-out",
+                    "ruleType": "NetworkRule",
+                    "sourceAddresses": [
+                      "*"
+                    ],
+                    "sourceIpGroups": []
+                  }
+                ]
+              }
+            ],
+            "size": "0.01 MB"
+          },
+          "type": "Microsoft.Network/FirewallPolicies/RuleCollectionGroups"
+        }
+      ]
+    }
+  },
+  "firewalls": {
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/rg-dmz/providers/microsoft.network/azurefirewalls/fw-legacy-dmz": {
+      "etag": "W/\"f0000003-0000-0000-0000-000000000000\"",
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-dmz/providers/Microsoft.Network/azureFirewalls/fw-legacy-dmz",
+      "location": "westeurope",
+      "name": "fw-legacy-dmz",
+      "properties": {
+        "additionalProperties": {
+          "Network.DNS.EnableProxy": "false"
+        },
+        "applicationRuleCollections": [
+          {
+            "etag": "W/\"f0000007-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-dmz/providers/Microsoft.Network/azureFirewalls/fw-legacy-dmz/applicationRuleCollections/app-dmz",
+            "name": "app-dmz",
+            "properties": {
+              "action": {
+                "type": "Allow"
+              },
+              "priority": 300,
+              "provisioningState": "Succeeded",
+              "rules": [
+                {
+                  "description": "",
+                  "fqdnTags": [],
+                  "name": "any-web",
+                  "protocols": [
+                    {
+                      "port": 80,
+                      "protocolType": "Http"
+                    },
+                    {
+                      "port": 443,
+                      "protocolType": "Https"
+                    }
+                  ],
+                  "sourceAddresses": [
+                    "10.50.0.0/24"
+                  ],
+                  "sourceIpGroups": [],
+                  "targetFqdns": [
+                    "*"
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "ipConfigurations": [
+          {
+            "etag": "W/\"f0000004-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-dmz/providers/Microsoft.Network/azureFirewalls/fw-legacy-dmz/azureFirewallIpConfigurations/ipconfig1",
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAddress": "10.50.1.4",
+              "privateIPAllocationMethod": "Dynamic",
+              "provisioningState": "Succeeded",
+              "publicIPAddress": {
+                "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-dmz/providers/Microsoft.Network/publicIPAddresses/pip-fw-legacy-dmz"
+              },
+              "subnet": {
+                "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-dmz/providers/Microsoft.Network/virtualNetworks/vnet-rg-dmz/subnets/AzureFirewallSubnet"
+              }
+            },
+            "type": "Microsoft.Network/azureFirewalls/azureFirewallIpConfigurations"
+          }
+        ],
+        "natRuleCollections": [
+          {
+            "etag": "W/\"f0000006-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-dmz/providers/Microsoft.Network/azureFirewalls/fw-legacy-dmz/natRuleCollections/nat-dmz",
+            "name": "nat-dmz",
+            "properties": {
+              "action": {
+                "type": "Dnat"
+              },
+              "priority": 100,
+              "provisioningState": "Succeeded",
+              "rules": [
+                {
+                  "description": "Администрирование",
+                  "destinationAddresses": [
+                    "198.51.100.20"
+                  ],
+                  "destinationPorts": [
+                    "22"
+                  ],
+                  "name": "ssh-admin",
+                  "protocols": [
+                    "TCP"
+                  ],
+                  "sourceAddresses": [
+                    "*"
+                  ],
+                  "sourceIpGroups": [],
+                  "translatedAddress": "10.50.0.10",
+                  "translatedPort": "22"
+                }
+              ]
+            }
+          }
+        ],
+        "networkRuleCollections": [
+          {
+            "etag": "W/\"f0000005-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-dmz/providers/Microsoft.Network/azureFirewalls/fw-legacy-dmz/networkRuleCollections/net-dmz",
+            "name": "net-dmz",
+            "properties": {
+              "action": {
+                "type": "Allow"
+              },
+              "priority": 200,
+              "provisioningState": "Succeeded",
+              "rules": [
+                {
+                  "description": "Выход в Интернет",
+                  "destinationAddresses": [
+                    "*"
+                  ],
+                  "destinationFqdns": [],
+                  "destinationIpGroups": [],
+                  "destinationPorts": [
+                    "80",
+                    "443"
+                  ],
+                  "name": "web-out",
+                  "protocols": [
+                    "TCP"
+                  ],
+                  "sourceAddresses": [
+                    "10.50.0.0/24"
+                  ],
+                  "sourceIpGroups": []
+                },
+                {
+                  "description": "Почтовый релей",
+                  "destinationAddresses": [],
+                  "destinationFqdns": [
+                    "smtp.example.com"
+                  ],
+                  "destinationIpGroups": [],
+                  "destinationPorts": [
+                    "25"
+                  ],
+                  "name": "smtp-relay",
+                  "protocols": [
+                    "TCP"
+                  ],
+                  "sourceAddresses": [
+                    "10.50.0.20"
+                  ],
+                  "sourceIpGroups": []
+                }
+              ]
+            }
+          }
+        ],
+        "provisioningState": "Succeeded",
+        "sku": {
+          "name": "AZFW_VNet",
+          "tier": "Standard"
+        },
+        "threatIntelMode": "Alert"
+      },
+      "tags": {
+        "owner": "dmz-team"
+      },
+      "type": "Microsoft.Network/azureFirewalls",
+      "zones": []
+    },
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/rg-hub-network/providers/microsoft.network/azurefirewalls/fw-hub-weu": {
+      "etag": "W/\"f0000001-0000-0000-0000-000000000000\"",
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-network/providers/Microsoft.Network/azureFirewalls/fw-hub-weu",
+      "location": "westeurope",
+      "name": "fw-hub-weu",
+      "properties": {
+        "additionalProperties": {},
+        "applicationRuleCollections": [],
+        "firewallPolicy": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-network/providers/Microsoft.Network/firewallPolicies/fwpol-hub-prod"
+        },
+        "ipConfigurations": [
+          {
+            "etag": "W/\"f0000002-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-network/providers/Microsoft.Network/azureFirewalls/fw-hub-weu/azureFirewallIpConfigurations/ipconfig1",
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAddress": "10.0.1.4",
+              "privateIPAllocationMethod": "Dynamic",
+              "provisioningState": "Succeeded",
+              "publicIPAddress": {
+                "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-network/providers/Microsoft.Network/publicIPAddresses/pip-fw-hub-weu"
+              },
+              "subnet": {
+                "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-network/providers/Microsoft.Network/virtualNetworks/vnet-rg-hub-network/subnets/AzureFirewallSubnet"
+              }
+            },
+            "type": "Microsoft.Network/azureFirewalls/azureFirewallIpConfigurations"
+          }
+        ],
+        "ipGroups": [
+          {
+            "changeNumber": "4",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-network/providers/Microsoft.Network/ipGroups/ipg-spokes"
+          }
+        ],
+        "natRuleCollections": [],
+        "networkRuleCollections": [],
+        "provisioningState": "Succeeded",
+        "sku": {
+          "name": "AZFW_VNet",
+          "tier": "Premium"
+        },
+        "threatIntelMode": "Alert"
+      },
+      "tags": {
+        "changeTicket": "CHG-1042",
+        "owner": "netops"
+      },
+      "type": "Microsoft.Network/azureFirewalls",
+      "zones": [
+        "1",
+        "2",
+        "3"
+      ]
+    }
+  },
+  "ip_groups": {
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/rg-hub-network/providers/microsoft.network/ipgroups/ipg-spokes": {
+      "etag": "W/\"f0000008-0000-0000-0000-000000000000\"",
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-network/providers/Microsoft.Network/ipGroups/ipg-spokes",
+      "location": "westeurope",
+      "name": "ipg-spokes",
+      "properties": {
+        "firewallPolicies": [
+          {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-network/providers/Microsoft.Network/firewallPolicies/fwpol-hub-prod"
+          }
+        ],
+        "firewalls": [
+          {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub-network/providers/Microsoft.Network/azureFirewalls/fw-hub-weu"
+          }
+        ],
+        "ipAddresses": [
+          "10.1.0.0/16",
+          "10.2.0.0/16",
+          "10.3.0.0/16"
+        ],
+        "provisioningState": "Succeeded"
+      },
+      "tags": {},
+      "type": "Microsoft.Network/IpGroups"
+    }
+  },
+  "network_security_groups": {
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/rg-app/providers/microsoft.network/networksecuritygroups/nsg-snet-db": {
+      "etag": "W/\"f0000032-0000-0000-0000-000000000000\"",
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-db",
+      "location": "westeurope",
+      "name": "nsg-snet-db",
+      "properties": {
+        "defaultSecurityRules": [
+          {
+            "etag": "W/\"f0000032-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-db/defaultSecurityRules/AllowVnetInBound",
+            "name": "AllowVnetInBound",
+            "properties": {
+              "access": "Allow",
+              "description": "",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 65000,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "VirtualNetwork",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          },
+          {
+            "etag": "W/\"f0000032-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-db/defaultSecurityRules/AllowAzureLoadBalancerInBound",
+            "name": "AllowAzureLoadBalancerInBound",
+            "properties": {
+              "access": "Allow",
+              "description": "",
+              "destinationAddressPrefix": "*",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 65001,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "AzureLoadBalancer",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          },
+          {
+            "etag": "W/\"f0000032-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-db/defaultSecurityRules/DenyAllInBound",
+            "name": "DenyAllInBound",
+            "properties": {
+              "access": "Deny",
+              "description": "",
+              "destinationAddressPrefix": "*",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 65500,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "*",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          },
+          {
+            "etag": "W/\"f0000032-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-db/defaultSecurityRules/AllowVnetOutBound",
+            "name": "AllowVnetOutBound",
+            "properties": {
+              "access": "Allow",
+              "description": "",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Outbound",
+              "priority": 65000,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "VirtualNetwork",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          },
+          {
+            "etag": "W/\"f0000032-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-db/defaultSecurityRules/AllowInternetOutBound",
+            "name": "AllowInternetOutBound",
+            "properties": {
+              "access": "Allow",
+              "description": "",
+              "destinationAddressPrefix": "Internet",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Outbound",
+              "priority": 65001,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "*",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          },
+          {
+            "etag": "W/\"f0000032-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-db/defaultSecurityRules/DenyAllOutBound",
+            "name": "DenyAllOutBound",
+            "properties": {
+              "access": "Deny",
+              "description": "",
+              "destinationAddressPrefix": "*",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Outbound",
+              "priority": 65500,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "*",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          }
+        ],
+        "provisioningState": "Succeeded",
+        "resourceGuid": "00000032-1111-2222-3333-444444444444",
+        "securityRules": [
+          {
+            "etag": "W/\"f0000033-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-db/securityRules/allow-sql-from-web",
+            "name": "allow-sql-from-web",
+            "properties": {
+              "access": "Allow",
+              "description": "",
+              "destinationAddressPrefix": "10.1.2.0/24",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "1433",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 100,
+              "protocol": "Tcp",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "10.1.1.0/24",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/securityRules"
+          },
+          {
+            "etag": "W/\"f0000034-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-db/securityRules/deny-internet-in",
+            "name": "deny-internet-in",
+            "properties": {
+              "access": "Deny",
+              "description": "",
+              "destinationAddressPrefix": "*",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 200,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "Internet",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/securityRules"
+          },
+          {
+            "etag": "W/\"f0000035-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-db/securityRules/allow-ssh-vendor",
+            "name": "allow-ssh-vendor",
+            "properties": {
+              "access": "Allow",
+              "description": "Устаревшее правило поставщика",
+              "destinationAddressPrefix": "*",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "22",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 300,
+              "protocol": "Tcp",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "Internet",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/securityRules"
+          }
+        ],
+        "subnets": [
+          {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/virtualNetworks/vnet-app/subnets/snet-db"
+          }
+        ]
+      },
+      "tags": {
+        "owner": "app-team"
+      },
+      "type": "Microsoft.Network/networkSecurityGroups"
+    },
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/rg-app/providers/microsoft.network/networksecuritygroups/nsg-snet-web": {
+      "etag": "W/\"f0000028-0000-0000-0000-000000000000\"",
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-web",
+      "location": "westeurope",
+      "name": "nsg-snet-web",
+      "properties": {
+        "defaultSecurityRules": [
+          {
+            "etag": "W/\"f0000028-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-web/defaultSecurityRules/AllowVnetInBound",
+            "name": "AllowVnetInBound",
+            "properties": {
+              "access": "Allow",
+              "description": "",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 65000,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "VirtualNetwork",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          },
+          {
+            "etag": "W/\"f0000028-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-web/defaultSecurityRules/AllowAzureLoadBalancerInBound",
+            "name": "AllowAzureLoadBalancerInBound",
+            "properties": {
+              "access": "Allow",
+              "description": "",
+              "destinationAddressPrefix": "*",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 65001,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "AzureLoadBalancer",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          },
+          {
+            "etag": "W/\"f0000028-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-web/defaultSecurityRules/DenyAllInBound",
+            "name": "DenyAllInBound",
+            "properties": {
+              "access": "Deny",
+              "description": "",
+              "destinationAddressPrefix": "*",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 65500,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "*",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          },
+          {
+            "etag": "W/\"f0000028-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-web/defaultSecurityRules/AllowVnetOutBound",
+            "name": "AllowVnetOutBound",
+            "properties": {
+              "access": "Allow",
+              "description": "",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Outbound",
+              "priority": 65000,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "VirtualNetwork",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          },
+          {
+            "etag": "W/\"f0000028-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-web/defaultSecurityRules/AllowInternetOutBound",
+            "name": "AllowInternetOutBound",
+            "properties": {
+              "access": "Allow",
+              "description": "",
+              "destinationAddressPrefix": "Internet",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Outbound",
+              "priority": 65001,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "*",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          },
+          {
+            "etag": "W/\"f0000028-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-web/defaultSecurityRules/DenyAllOutBound",
+            "name": "DenyAllOutBound",
+            "properties": {
+              "access": "Deny",
+              "description": "",
+              "destinationAddressPrefix": "*",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Outbound",
+              "priority": 65500,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "*",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/defaultSecurityRules"
+          }
+        ],
+        "provisioningState": "Succeeded",
+        "resourceGuid": "00000028-1111-2222-3333-444444444444",
+        "securityRules": [
+          {
+            "etag": "W/\"f0000029-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-web/securityRules/allow-https-in",
+            "name": "allow-https-in",
+            "properties": {
+              "access": "Allow",
+              "description": "Публичный портал за брандмауэром",
+              "destinationAddressPrefix": "10.1.1.0/24",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "443",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 100,
+              "protocol": "Tcp",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "Internet",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/securityRules"
+          },
+          {
+            "etag": "W/\"f000002a-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-web/securityRules/allow-lb-probe",
+            "name": "allow-lb-probe",
+            "properties": {
+              "access": "Allow",
+              "description": "",
+              "destinationAddressPrefix": "*",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 110,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "AzureLoadBalancer",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/securityRules"
+          },
+          {
+            "etag": "W/\"f000002b-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-web/securityRules/deny-internet-in",
+            "name": "deny-internet-in",
+            "properties": {
+              "access": "Deny",
+              "description": "Остальной входящий трафик из Интернета",
+              "destinationAddressPrefix": "*",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "*",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 4000,
+              "protocol": "*",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "Internet",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/securityRules"
+          },
+          {
+            "etag": "W/\"0000002c-0000-0000-0000-000000000000\"",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-web/securityRules/allow-rdp-temp",
+            "name": "allow-rdp-temp",
+            "properties": {
+              "access": "Allow",
+              "description": "Временно для подрядчика",
+              "destinationAddressPrefix": "*",
+              "destinationAddressPrefixes": [],
+              "destinationPortRange": "3389",
+              "destinationPortRanges": [],
+              "direction": "Inbound",
+              "priority": 120,
+              "protocol": "Tcp",
+              "provisioningState": "Succeeded",
+              "sourceAddressPrefix": "*",
+              "sourceAddressPrefixes": [],
+              "sourcePortRange": "*",
+              "sourcePortRanges": []
+            },
+            "type": "Microsoft.Network/networkSecurityGroups/securityRules"
+          }
+        ],
+        "subnets": [
+          {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Network/virtualNetworks/vnet-app/subnets/snet-web"
+          }
+        ]
+      },
+      "tags": {
+        "owner": "app-team"
+      },
+      "type": "Microsoft.Network/networkSecurityGroups"
+    }
+  },
+  "schema_version": 1,
+  "scope": {
+    "all_policies": false,
+    "firewalls": [],
+    "include_nsgs": true,
+    "nsgs": [],
+    "resource_group": null,
+    "subscriptions": [
+      "00000000-0000-0000-0000-000000000000"
+    ]
+  },
+  "tool": {
+    "name": "azfw-audit",
+    "version": "1.2.0"
+  }
+}

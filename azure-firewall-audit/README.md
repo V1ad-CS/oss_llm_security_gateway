@@ -1,17 +1,26 @@
 # Аудит конфигурации Azure Firewall и NSG
 
-`azfw_audit.py` получает конфигурацию Azure Firewall и Network Security Groups (NSG),
-находит изменения относительно утверждённого эталона и отклонения от стандарта
-безопасности, а затем формирует отчёт в форматах Markdown, HTML и JSON.
-**Конфигурация в Azure не изменяется.**
+`azfw_audit.py` получает конфигурацию Azure Firewall и Network Security Groups (NSG) и
+формирует три отчёта в форматах Markdown, HTML и JSON. Об ошибках скрипт сообщает в
+Rocket.Chat. **Конфигурация в Azure не изменяется.**
 
 ```text
-Azure Resource Manager ──GET──► снимок (JSON) ──┬─► изменения относительно эталона
-                                                ├─► отклонения от standard.yaml
-                                                └─► отчёт .md / .html / .json
+                                              ┌─► 1. Изменения с прошлого сбора   (предыдущий снимок)
+Azure Resource Manager ──GET──► снимок (JSON) ├─► 2. Отличия от эталона           (--baseline)
+                                              └─► 3. Нарушения стандарта ИБ       (standard.yaml)
+                                       ошибки ──► Rocket.Chat
 ```
 
-Пример отчёта на демонстрационных данных: [examples/report.md](examples/report.md).
+| № | Отчёт | С чем сравнивается | Отвечает на вопрос |
+|---|---|---|---|
+| 1 | Изменения с прошлого сбора (`changes`) | Предыдущий снимок: в `run` — последний `azfw-snapshot-*.json` в `--output-dir` | Что поменяли с последней проверки и кто |
+| 2 | Отличия от эталона (`drift`) | Утверждённый эталон `--baseline` | Что отличается от согласованной конфигурации |
+| 3 | Нарушения стандарта ИБ (`compliance`) | Требования `standard.yaml` | Что опасно или запрещено стандартом, с рекомендациями и инвентаризацией |
+
+Примеры отчётов на демонстрационных данных:
+[изменения с прошлого сбора](examples/report-changes.md),
+[отличия от эталона](examples/report-drift.md),
+[нарушения стандарта ИБ](examples/report-compliance.md).
 
 Документация:
 
@@ -34,6 +43,9 @@ Azure Resource Manager ──GET──► снимок (JSON) ──┬─► и
 - Учётной записи достаточно встроенной роли **Reader** («Читатель») на подписку или
   группы ресурсов с брандмауэрами, политиками, IP-группами и NSG. Если базовая политика
   лежит в другой подписке, на ту подписку тоже нужна роль Reader.
+- Единственный запрос не на чтение — POST сообщения во входящий вебхук Rocket.Chat. Он
+  идёт отдельной HTTP-сессией на адрес вебхука, без токена Azure, и в Azure ничего не
+  отправляет.
 
 ## Что собирается
 
@@ -84,38 +96,90 @@ pip install -r requirements.txt
 
 ```bash
 python azfw_audit.py collect -s <subscription-id> -o baselines/azfw-baseline.json
-python azfw_audit.py report -c baselines/azfw-baseline.json -o baselines/azfw-baseline.html
+python azfw_audit.py report -c baselines/azfw-baseline.json --kind compliance -o baselines/azfw-baseline-compliance.html
 ```
 
-**2. Регулярная проверка.** Скрипт собирает новый снимок, сравнивает его с эталоном,
-проверяет по стандарту и сохраняет снимок и отчёты в каталог:
+**2. Регулярная проверка.** Скрипт собирает новый снимок, сравнивает его с предыдущим
+снимком из каталога и с эталоном, проверяет по стандарту и сохраняет всё в каталог:
 
 ```bash
+export ROCKETCHAT_WEBHOOK_URL='https://chat.example.com/hooks/<id>/<токен>'
 python azfw_audit.py run -s <subscription-id> \
     --baseline baselines/azfw-baseline.json \
     --output-dir reports \
     --fail-on high --fail-on-drift
 ```
 
-В каталоге появятся файлы `azfw-snapshot-<время>.json` и `azfw-report-<время>.{md,html,json}`.
-Журнал действий по умолчанию читается с даты эталона (не более чем за 90 дней), чтобы
-в отчёте было видно, кто вносил изменения.
+В каталоге после каждого запуска появляются снимок `azfw-snapshot-<время>.json` и три
+отчёта в каждом формате:
+
+```text
+azfw-changes-<время>.{md,html,json}      1. Изменения с прошлого сбора
+azfw-drift-<время>.{md,html,json}        2. Отличия от эталона
+azfw-compliance-<время>.{md,html,json}   3. Нарушения стандарта ИБ
+```
+
+Предыдущим сбором считается самый новый читаемый `azfw-snapshot-*.json` в `--output-dir`
+(другой можно указать параметром `--previous`). При первом запуске его нет, и отчёт 1 сообщает,
+что изменения появятся со следующего запуска. Поэтому каталог `--output-dir` должен
+сохраняться между запусками. Журнал действий по умолчанию читается с даты самого старого из
+сравниваемых снимков (не более чем за 90 дней); в отчёт 1 попадают только операции после
+предыдущего сбора.
 
 **3. После согласованного изменения** замените эталон новым снимком из `reports/`.
 
-Отчёт по уже сохранённым снимкам строится без обращения к Azure:
+Отчёты по уже сохранённым снимкам строятся без обращения к Azure:
 
 ```bash
-python azfw_audit.py report -c examples/current.snapshot.json -b examples/baseline.snapshot.json -o report.html
+# все три отчёта в каталог
+python azfw_audit.py report -c examples/current.snapshot.json -p examples/previous.snapshot.json \
+    -b examples/baseline.snapshot.json --format html --output-dir out
+# один отчёт в файл
+python azfw_audit.py report -c examples/current.snapshot.json --kind compliance -o compliance.html
 ```
+
+## Уведомления в Rocket.Chat
+
+Скрипт отправляет сообщение во входящий вебхук Rocket.Chat, когда:
+
+- запуск не удался (код выхода 1): нет входа в Azure, неверные параметры, повреждённый снимок,
+  непредвиденный сбой — с текстом ошибки;
+- часть конфигурации не прочитана (код 3) — со списком объектов, кодом ответа и подсказкой
+  (например, назначить роль Reader).
+
+Параметр `--notify` (или переменная `ROCKETCHAT_NOTIFY`) расширяет поводы:
+
+| Значение | Когда отправляется сообщение |
+|---|---|
+| `errors` (по умолчанию) | Коды выхода 1 и 3 |
+| `attention` | Также код 2 — сработали `--fail-on`, `--fail-on-drift` или `--fail-on-change` |
+| `always` | После каждого запуска |
+
+В сообщении: статус, команда, код выхода, узел, область сбора, итоги трёх отчётов, до пяти
+самых серьёзных нарушений, сработавшие пороги и имена файлов отчётов.
+
+Настройка:
+
+1. В Rocket.Chat: *Администрирование → Рабочее пространство → Интеграции → Новая →
+   Входящая*. Включите интеграцию, выберите канал (например, `#netsec-alerts`) и
+   пользователя, от имени которого публикуются сообщения. Скрипт интеграции не нужен.
+2. Скопируйте адрес вебхука `https://<сервер>/hooks/<id>/<токен>` и передайте его в
+   переменной окружения `ROCKETCHAT_WEBHOOK_URL`. Параметр `--rocketchat-webhook` тоже
+   работает, но в командной строке адрес с токеном видят другие пользователи системы.
+
+Токен вебхука не выводится в журнал — только имя сервера. Если Rocket.Chat недоступен, скрипт
+повторяет отправку (до 3 попыток), пишет предупреждение и завершается с тем же кодом выхода.
+Для Rocket.Chat с внутренним центром сертификации укажите путь к сертификату ЦС в
+`REQUESTS_CA_BUNDLE`, для прокси — `HTTPS_PROXY` и `NO_PROXY`.
 
 ## Команды
 
 | Команда | Что делает |
 |---|---|
 | `collect -o FILE` | Сохраняет снимок конфигурации |
-| `report -c FILE [-b FILE] [-o FILE \| --output-dir DIR]` | Строит отчёт по снимкам; без `-o` выводит Markdown в stdout |
-| `run --output-dir DIR` | Выполняет `collect` и `report` за один запуск |
+| `report -c FILE [-p FILE] [-b FILE] --output-dir DIR` | Строит три отчёта по сохранённым снимкам |
+| `report -c FILE … --kind KIND [-o FILE]` | Строит один отчёт в файл или, без `-o`, в stdout |
+| `run --output-dir DIR` | Собирает снимок и строит три отчёта за один запуск |
 
 Параметры сбора (`collect`, `run`):
 
@@ -136,11 +200,21 @@ python azfw_audit.py report -c examples/current.snapshot.json -b examples/baseli
 
 | Параметр | Значение |
 |---|---|
-| `-b`, `--baseline` | Эталонный снимок |
-| `--standard` | Файл стандарта; по умолчанию `standard.yaml` рядом со скриптом |
+| `-p`, `--previous` | Предыдущий снимок для отчёта 1; в `run` по умолчанию — последний снимок в `--output-dir` |
+| `-b`, `--baseline` | Эталонный снимок для отчёта 2 |
+| `--standard` | Файл стандарта для отчёта 3; по умолчанию `standard.yaml` рядом со скриптом |
+| `--kind` | `changes`, `drift`, `compliance`; можно несколько раз; по умолчанию все три |
 | `--format` | `md`, `html`, `json` или список через запятую |
-| `--fail-on LEVEL` | Код выхода 2, если есть отклонения уровня `info`/`low`/`medium`/`high`/`critical` или выше |
+| `--fail-on LEVEL` | Код выхода 2, если есть нарушения уровня `info`/`low`/`medium`/`high`/`critical` или выше |
 | `--fail-on-drift` | Код выхода 2, если конфигурация отличается от эталона |
+| `--fail-on-change` | Код выхода 2, если конфигурация изменилась с прошлого сбора |
+
+Параметры уведомлений (все команды):
+
+| Параметр | Значение |
+|---|---|
+| `--rocketchat-webhook URL` | Адрес входящего вебхука; по умолчанию `ROCKETCHAT_WEBHOOK_URL` |
+| `--notify` | `errors`, `attention` или `always`; по умолчанию `ROCKETCHAT_NOTIFY` или `errors` |
 
 Коды выхода:
 
@@ -148,12 +222,13 @@ python azfw_audit.py report -c examples/current.snapshot.json -b examples/baseli
 |---|---|
 | 0 | Проверка завершена, пороги не превышены |
 | 1 | Ошибка: нет доступа к Azure AD, неверные параметры, повреждённый снимок |
-| 2 | Сработал `--fail-on` или `--fail-on-drift` |
+| 2 | Сработал `--fail-on`, `--fail-on-drift` или `--fail-on-change` |
 | 3 | Отчёт сформирован, но часть конфигурации прочитать не удалось (например, 403 на базовую политику) |
 
 ## Что считается изменением
 
-Снимок раскладывается на объекты: брандмауэры, политики, группы коллекций, коллекции,
+Это относится к отчётам 1 и 2: они сравнивают снимки одинаково, только с разными точками
+отсчёта. Снимок раскладывается на объекты: брандмауэры, политики, группы коллекций, коллекции,
 правила, IP-группы, параметры диагностики, NSG и их правила. Объекты сопоставляются по
 ARM ID и именам,
 поэтому в отчёте видно, какое именно правило добавлено, удалено, переименовано или
@@ -183,7 +258,7 @@ ARM ID и именам,
 «Не сравнивались», а не в «Удалено». Ответ 404 означает, что объекта нет, и такой объект
 считается удалённым.
 
-## Проверки
+## Проверки (отчёт 3)
 
 | Проверка | Уровень | Что ищет |
 |---|---|---|
@@ -247,7 +322,8 @@ exceptions:
 
 ## Запуск по расписанию
 
-GitHub Actions с OIDC-входом (сервисному принципалу нужна только роль Reader):
+GitHub Actions с OIDC-входом (сервисному принципалу нужна только роль Reader). Каталог
+`reports` восстанавливается из кэша, чтобы отчёт 1 находил снимок предыдущего запуска:
 
 ```yaml
 name: azure-firewall-audit
@@ -262,8 +338,14 @@ jobs:
     runs-on: ubuntu-latest
     env:
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      ROCKETCHAT_WEBHOOK_URL: ${{ secrets.ROCKETCHAT_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: reports
+          key: azfw-reports-${{ github.run_id }}
+          restore-keys: azfw-reports-
       - uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -276,11 +358,12 @@ jobs:
           --output-dir reports --fail-on high --fail-on-drift
       - uses: actions/upload-artifact@v4
         if: always()
-        with: {name: azfw-report, path: reports/}
+        with: {name: azfw-reports, path: reports/}
 ```
 
 Вместо GitHub Actions подойдут cron, Azure Automation или Azure DevOps: достаточно
-запустить `run` под учётной записью с ролью Reader и сохранять каталог с отчётами.
+запустить `run` под учётной записью с ролью Reader и сохранять каталог с отчётами между
+запусками.
 
 ## Ограничения
 
@@ -305,5 +388,5 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-Тесты не обращаются к Azure: ответы Resource Manager подменяет заглушка, у которой есть
-только метод `get`.
+Тесты не обращаются к Azure и Rocket.Chat: ответы Resource Manager подменяет заглушка,
+у которой есть только метод `get`, а вебхук — заглушка и локальный HTTP-сервер.

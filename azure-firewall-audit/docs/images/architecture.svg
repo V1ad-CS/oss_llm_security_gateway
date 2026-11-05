@@ -39,7 +39,7 @@
   <!-- Writes blocked -->
   <line x1="700" y1="253" x2="742" y2="253" stroke="#B42318" stroke-width="2.5" marker-end="url(#arrow-red)"/>
   <rect x="746" y="188" width="198" height="130" rx="12" fill="#FDECEC" stroke="#C0392B" stroke-width="2"/>
-  <text x="845" y="222" text-anchor="middle" font-size="18" font-weight="bold" fill="#B42318">ЗАПИСЬ</text>
+  <text x="845" y="222" text-anchor="middle" font-size="18" font-weight="bold" fill="#B42318">ЗАПИСЬ В AZURE</text>
   <text x="845" y="248" text-anchor="middle" font-size="15" fill="#7F1D1D">POST · PUT</text>
   <text x="845" y="268" text-anchor="middle" font-size="15" fill="#7F1D1D">PATCH · DELETE</text>
   <text x="845" y="294" text-anchor="middle" font-size="14" fill="#7F1D1D">блокируется до отправки</text>
@@ -56,13 +56,13 @@
 
   <!-- Drift -->
   <rect x="40" y="528" width="350" height="210" rx="14" fill="#EEF7F1" stroke="#2E7D4F" stroke-width="2.5"/>
-  <text x="60" y="560" font-size="20" font-weight="bold" fill="#1E5631">Сравнение с эталоном</text>
-  <text x="60" y="584" font-size="15" fill="#374151">вход: эталонный снимок (--baseline)</text>
+  <text x="60" y="560" font-size="20" font-weight="bold" fill="#1E5631">Сравнение снимков</text>
+  <text x="60" y="584" font-size="15" fill="#374151">поля правил: было → стало, кто менял</text>
   <g font-size="14.5" fill="#111827">
     <rect x="60" y="598" width="310" height="36" rx="8" fill="#FFFFFF" stroke="#A7D3B5" stroke-width="1.5"/>
-    <text x="74" y="621">добавлено · удалено · изменено</text>
+    <text x="74" y="621"><tspan font-weight="bold">1.</tspan> с предыдущим снимком</text>
     <rect x="60" y="642" width="310" height="36" rx="8" fill="#FFFFFF" stroke="#A7D3B5" stroke-width="1.5"/>
-    <text x="74" y="665">переименования; поля: было → стало</text>
+    <text x="74" y="665"><tspan font-weight="bold">2.</tspan> с эталоном (--baseline)</text>
     <rect x="60" y="686" width="310" height="36" rx="8" fill="#FFFFFF" stroke="#A7D3B5" stroke-width="1.5"/>
     <text x="74" y="709">не прочитанное — «не сравнивались»</text>
   </g>
@@ -70,7 +70,7 @@
   <!-- Standard -->
   <rect x="410" y="528" width="290" height="210" rx="14" fill="#FDF6E9" stroke="#B7791F" stroke-width="2.5"/>
   <text x="430" y="560" font-size="20" font-weight="bold" fill="#7A4A0B">Проверка по стандарту</text>
-  <text x="430" y="584" font-size="15" fill="#374151">вход: standard.yaml</text>
+  <text x="430" y="584" font-size="15" fill="#374151"><tspan font-weight="bold">3.</tspan> вход: standard.yaml</text>
   <g font-size="14.5" fill="#111827">
     <rect x="430" y="598" width="250" height="36" rx="8" fill="#FFFFFF" stroke="#E8C98A" stroke-width="1.5"/>
     <text x="444" y="621">настройки брандмауэров</text>
@@ -94,7 +94,16 @@
 
   <!-- Report -->
   <rect x="150" y="788" width="440" height="96" rx="12" fill="#F3F4F6" stroke="#6B7280" stroke-width="2"/>
-  <text x="370" y="822" text-anchor="middle" font-size="21" font-weight="bold" fill="#111827">Отчёт · Markdown · HTML · JSON</text>
-  <text x="370" y="848" text-anchor="middle" font-size="15" fill="#374151">сводка, инвентаризация, изменения, отклонения,</text>
-  <text x="370" y="870" text-anchor="middle" font-size="15" fill="#374151">рекомендации; код выхода 0 · 1 · 2 · 3 для CI</text>
+  <text x="370" y="822" text-anchor="middle" font-size="21" font-weight="bold" fill="#111827">Три отчёта · MD · HTML · JSON</text>
+  <text x="370" y="848" text-anchor="middle" font-size="15" fill="#374151">1 — изменения с прошлого сбора, 2 — отличия</text>
+  <text x="370" y="870" text-anchor="middle" font-size="15" fill="#374151">от эталона, 3 — нарушения стандарта ИБ</text>
+
+  <!-- Rocket.Chat -->
+  <line x1="590" y1="836" x2="742" y2="836" stroke="#B42318" stroke-width="2.5" marker-end="url(#arrow-red)"/>
+  <text x="666" y="826" text-anchor="middle" font-size="14" fill="#B42318">коды 1 и 3</text>
+  <rect x="746" y="778" width="198" height="116" rx="12" fill="#FDECEC" stroke="#C0392B" stroke-width="2"/>
+  <text x="845" y="810" text-anchor="middle" font-size="18" font-weight="bold" fill="#B42318">Rocket.Chat</text>
+  <text x="845" y="836" text-anchor="middle" font-size="14" fill="#7F1D1D">ошибки и неполные</text>
+  <text x="845" y="856" text-anchor="middle" font-size="14" fill="#7F1D1D">данные; по --notify —</text>
+  <text x="845" y="876" text-anchor="middle" font-size="14" fill="#7F1D1D">и пороги (код 2)</text>
 </svg>

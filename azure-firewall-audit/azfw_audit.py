@@ -35,6 +35,7 @@ import logging
 import math
 import os
 import re
+import socket
 import sys
 import time
 from dataclasses import dataclass
@@ -47,7 +48,7 @@ import yaml
 from requests.adapters import HTTPAdapter
 
 TOOL_NAME = "azfw-audit"
-TOOL_VERSION = "1.1.0"
+TOOL_VERSION = "1.2.0"
 SNAPSHOT_SCHEMA_VERSION = 1
 
 DEFAULT_ARM_ENDPOINT = "https://management.azure.com"
@@ -281,6 +282,27 @@ KIND_TITLES = {
     "diagnostic_setting": "Диагностика",
     "network_security_group": "NSG",
     "security_rule": "Правило NSG",
+}
+
+# The three reports, in the order they are written and listed.
+REPORT_KINDS = ("changes", "drift", "compliance")
+REPORT_TITLES = {
+    "changes": "Изменения с прошлого сбора",
+    "drift": "Отличия от эталона",
+    "compliance": "Нарушения стандарта ИБ",
+}
+REPORT_PURPOSES = {
+    "changes": "Что изменилось в конфигурации Azure Firewall и NSG с предыдущего сбора — согласованные и "
+               "несогласованные изменения.",
+    "drift": "Чем текущая конфигурация Azure Firewall и NSG отличается от утверждённого эталона: всё, что "
+             "изменено и ещё не согласовано заменой эталона.",
+    "compliance": "Какие настройки и правила Azure Firewall и NSG нарушают стандарт информационной безопасности.",
+}
+REFERENCE_TITLES = {"changes": "Предыдущий сбор", "drift": "Эталон (baseline)"}
+NO_REFERENCE_TEXTS = {
+    "changes": "Предыдущий снимок не найден: это первый сбор в каталоге отчётов, или не задан --previous. "
+               "Изменения будут показаны после следующего запуска.",
+    "drift": "Эталон не задан. Сохраните утверждённый снимок командой collect и передайте его в --baseline.",
 }
 
 log = logging.getLogger(TOOL_NAME)
@@ -1721,46 +1743,71 @@ def _snapshot_meta(snapshot: dict) -> dict:
     }
 
 
-def build_report(
+def _activity_since(activity: dict | None, since: str | None) -> dict | None:
+    """Activity Log entries made after the reference snapshot was taken."""
+    if not activity or not since:
+        return activity
+    events = [event for event in activity.get("events") or [] if (event.get("time") or "")[:19] >= since[:19]]
+    return {**activity, "from": max(activity.get("from") or "", since), "events": events}
+
+
+def build_reports(
     current: dict,
+    previous: dict | None = None,
     baseline: dict | None = None,
     standard: dict | None = None,
     standard_source: str | None = None,
     today: dt.date | None = None,
-) -> dict:
+) -> dict[str, dict]:
+    """The three reports, keyed by REPORT_KINDS: what changed since the previous
+    collection, what differs from the baseline, what violates the standard."""
     standard = standard if standard is not None else load_standard(None)
     auditor = Auditor(current, standard)
     findings, accepted, exception_problems = apply_exceptions(auditor.run(), standard.get("exceptions"), today or utcnow().date())
-    drift = diff_snapshots(baseline, current) if baseline is not None else None
     errors = current.get("errors") or []
-    by_severity = {severity: sum(1 for f in findings if f["severity"] == severity) for severity in SEVERITIES}
-    return {
+    incomplete = any(error.get("incomplete", True) for error in errors)
+    common = {
         "tool": {"name": TOOL_NAME, "version": TOOL_VERSION},
         "generated_at": isoformat(utcnow()),
         "read_only": True,
         "snapshot": _snapshot_meta(current),
-        "baseline": _snapshot_meta(baseline) if baseline is not None else None,
+        "errors": errors,
+    }
+    reports: dict[str, dict] = {}
+    for kind, reference in (("changes", previous), ("drift", baseline)):
+        drift = diff_snapshots(reference, current) if reference is not None else None
+        reports[kind] = {
+            **common,
+            "kind": kind,
+            "title": REPORT_TITLES[kind],
+            "reference": _snapshot_meta(reference) if reference is not None else None,
+            "summary": {"drift": drift["summary"] if drift else None, "collection_errors": len(errors), "incomplete": incomplete},
+            "drift": drift,
+            # who made the changes: only entries after the snapshot compared with
+            "activity_log": _activity_since(current.get("activity_log"), reference.get("collected_at")) if reference else None,
+        }
+    reports["compliance"] = {
+        **common,
+        "kind": "compliance",
+        "title": REPORT_TITLES["compliance"],
         "standard": standard_source or "встроенные значения по умолчанию",
         "summary": {
             "findings_total": len(findings),
-            "findings_by_severity": by_severity,
+            "findings_by_severity": {severity: sum(1 for f in findings if f["severity"] == severity) for severity in SEVERITIES},
             "accepted_findings": len(accepted),
-            "drift": drift["summary"] if drift else None,
             "collection_errors": len(errors),
-            "incomplete": any(error.get("incomplete", True) for error in errors),
+            "incomplete": incomplete,
         },
         "inventory": {
-            "firewalls": [auditor.firewall_settings[key] for key in sorted(auditor.firewall_settings, key=lambda k: auditor.firewall_settings[k]["label"].lower())],
+            "firewalls": sorted(auditor.firewall_settings.values(), key=lambda row: row["label"].lower()),
             "firewall_policies": auditor.policy_inventory(),
             "network_security_groups": auditor.nsg_inventory(),
         },
-        "drift": drift,
         "findings": findings,
         "accepted_findings": accepted,
         "exception_problems": exception_problems,
-        "activity_log": current.get("activity_log"),
-        "errors": errors,
     }
+    return {kind: reports[kind] for kind in REPORT_KINDS}
 
 
 def describe_rule(rule: dict) -> str:
@@ -1869,27 +1916,6 @@ def _error_text(error: dict) -> str:
     return f"{error.get('message', '')} ({hint})" if hint else str(error.get("message", ""))
 
 
-def _verdict(report: dict) -> str:
-    summary = report["summary"]
-    parts = []
-    if summary["incomplete"]:
-        parts.append("Часть конфигурации не удалось прочитать — результаты неполные (см. «Ошибки получения данных»).")
-    counts = summary["findings_by_severity"]
-    if summary["findings_total"]:
-        details = ", ".join(f"{SEVERITY_TITLES[s].lower()}: {counts[s]}" for s in reversed(SEVERITIES) if counts[s])
-        parts.append(f"Отклонений от стандарта: {summary['findings_total']} ({details}).")
-    else:
-        parts.append("Отклонений от стандарта не обнаружено.")
-    drift = summary["drift"]
-    if drift is None:
-        parts.append("Эталон не задан — изменения не проверялись.")
-    elif drift["total"]:
-        parts.append(f"Изменений относительно эталона: {drift['total']}.")
-    else:
-        parts.append("Изменений относительно эталона нет.")
-    return " ".join(parts)
-
-
 @dataclass(frozen=True)
 class Severity:
     """Table cell with a severity; HTML renders it as a coloured badge."""
@@ -1900,38 +1926,164 @@ class Severity:
         return SEVERITY_TITLES[self.level]
 
 
-def report_blocks(report: dict) -> list[tuple]:
-    """The report as a list of format-neutral blocks: ("h1"|"h2"|"h3"|"p", text),
-    ("kv", [(key, value)]) and ("table", headers, rows)."""
-    snapshot, baseline, summary = report["snapshot"], report["baseline"], report["summary"]
-    blocks: list[tuple] = [("h1", "Отчёт аудита Azure Firewall и NSG")]
-    blocks.append(("kv", [
+INCOMPLETE_NOTE = "Часть конфигурации не удалось прочитать — результаты неполные (см. «Ошибки получения данных»)."
+
+
+def _header_blocks(report: dict) -> list[tuple]:
+    kind, snapshot = report["kind"], report["snapshot"]
+    items = [
         ("Сформирован", fmt_time(report["generated_at"])),
         ("Снимок конфигурации", f"{fmt_time(snapshot['collected_at'])}; {_scope_text(snapshot['scope'])}"),
-        ("Эталон (baseline)", fmt_time(baseline["collected_at"]) if baseline else "не задан"),
-        ("Стандарт", report["standard"]),
-        ("Режим", "только чтение — конфигурация Azure не изменялась"),
+    ]
+    if kind == "compliance":
+        items.append(("Стандарт", report["standard"]))
+    else:
+        reference = report["reference"]
+        items.append((REFERENCE_TITLES[kind], fmt_time(reference["collected_at"]) if reference else "не задан"))
+    items.append(("Режим", "только чтение — конфигурация Azure не изменялась"))
+    return [("h1", report["title"]), ("p", REPORT_PURPOSES[kind]), ("kv", items)]
+
+
+def _footer_blocks(report: dict) -> list[tuple]:
+    blocks: list[tuple] = []
+    if report["errors"]:
+        blocks.append(("h2", "Ошибки получения данных"))
+        blocks.append(("table", ["Объект", "Этап", "Код", "Сообщение"], [
+            [_short_resource(e["scope"]) if "/providers/" in e["scope"] else e["scope"], e["stage"], e.get("status") or "—", _error_text(e)]
+            for e in report["errors"]
+        ]))
+    blocks.append(("p", f"{TOOL_NAME} {TOOL_VERSION}: данные получены только GET-запросами к Azure Resource Manager; конфигурация не изменялась."))
+    return blocks
+
+
+def _drift_verdict(report: dict) -> str:
+    kind, drift = report["kind"], report["drift"]
+    since = fmt_time(drift["baseline_collected_at"])
+    total = drift["summary"]["total"]
+    if kind == "changes":
+        text = f"С прошлого сбора ({since}) изменений: {total}." if total else f"С прошлого сбора ({since}) конфигурация не менялась."
+    else:
+        text = (
+            f"Отличий от эталона ({since}): {total}. Согласованные изменения внесите в эталон, несогласованные — откатите."
+            if total else "Конфигурация совпадает с эталоном."
+        )
+    return f"{INCOMPLETE_NOTE} {text}" if report["summary"]["incomplete"] else text
+
+
+def _drift_report_blocks(report: dict) -> list[tuple]:
+    """Report 1 (changes since the previous collection) and report 2 (drift from the baseline)."""
+    kind, drift = report["kind"], report["drift"]
+    blocks = _header_blocks(report)
+    blocks.append(("h2", "Итог"))
+    if drift is None:
+        blocks.append(("p", NO_REFERENCE_TEXTS[kind]))
+        return blocks + _footer_blocks(report)
+
+    summary = drift["summary"]
+    blocks.append(("p", _drift_verdict(report)))
+    blocks.append(("table", ["Показатель", "Значение"], [
+        ["Добавлено", summary["added"]],
+        ["Удалено", summary["removed"]],
+        ["Изменено", summary["modified"]],
+        ["Переименовано", summary["renamed"]],
+        ["Не сравнивались", summary["not_compared"]],
+        ["Ошибки получения данных", report["summary"]["collection_errors"]],
     ]))
 
+    blocks.append(("h2", "Изменения"))
+    if drift["scope_mismatch"]:
+        blocks.append(("p", f"Внимание: область сбора ({REFERENCE_TITLES[kind].lower()}) и текущего снимка различается — "
+                            "часть объектов может быть отмечена как добавленные или удалённые."))
+    for note in drift.get("notes") or []:
+        blocks.append(("p", note))
+    rows = []
+    for record in drift["added"]:
+        rows.append([record["label"], 1, "Добавлено", KIND_TITLES[record["kind"]], describe_entity(record["kind"], record["data"])])
+    for record in drift["removed"]:
+        rows.append([record["label"], 2, "Удалено", KIND_TITLES[record["kind"]], describe_entity(record["kind"], record["data"])])
+    for record in drift["renamed"]:
+        rows.append([record["label"], 3, "Переименовано", KIND_TITLES[record["kind"]], f"было: {record['old_label']}; {describe_entity(record['kind'], record['data'])}"])
+    for record in drift["modified"]:
+        for change in record["changes"]:
+            rows.append([record["label"], 4, "Изменено", KIND_TITLES[record["kind"]], describe_change(change)])
+    rows.sort(key=lambda row: (row[0].lower(), row[1]))
+    if rows:
+        blocks.append(("table", ["Объект", "Изменение", "Тип", "Подробности"], [[r[0], r[2], r[3], r[4]] for r in rows]))
+    else:
+        blocks.append(("p", "Изменений нет."))
+    if drift["not_compared"]:
+        blocks.append(("h3", "Не сравнивались"))
+        blocks.append(("table", ["Объект", "Тип", "Причина"], [
+            [record["label"], KIND_TITLES[record["kind"]], record["reason"]] for record in drift["not_compared"]
+        ]))
+
+    activity = report.get("activity_log")
+    if activity:
+        blocks.append(("h2", "Журнал действий Azure"))
+        blocks.append(("p", f"Кто и когда менял брандмауэры, политики, IP-группы, NSG, подсети и диагностику: "
+                            f"с {fmt_time(activity['from'])} по {fmt_time(activity['to'])}."))
+        if activity.get("events"):
+            blocks.append(("table", ["Время", "Кто", "Операция", "Ресурс", "Статус"], [
+                [fmt_time(e["time"]), e["caller"] or "—", e["operation"].split("/", 1)[-1], _short_resource(e["resource_id"]), e["status"]]
+                for e in activity["events"]
+            ]))
+        else:
+            blocks.append(("p", "Операций изменения не найдено."))
+        for error in activity.get("errors") or []:
+            blocks.append(("p", f"Журнал действий {error['scope']} не прочитан: {_error_text(error)}"))
+    return blocks + _footer_blocks(report)
+
+
+def _compliance_verdict(report: dict) -> str:
+    summary = report["summary"]
+    counts = summary["findings_by_severity"]
+    if summary["findings_total"]:
+        details = ", ".join(f"{SEVERITY_TITLES[s].lower()}: {counts[s]}" for s in reversed(SEVERITIES) if counts[s])
+        text = f"Нарушений стандарта ИБ: {summary['findings_total']} ({details})."
+    else:
+        text = "Нарушений стандарта ИБ не обнаружено."
+    return f"{INCOMPLETE_NOTE} {text}" if summary["incomplete"] else text
+
+
+def _compliance_blocks(report: dict) -> list[tuple]:
+    """Report 3: what violates the security standard."""
+    snapshot, summary = report["snapshot"], report["summary"]
+    blocks = _header_blocks(report)
     blocks.append(("h2", "Итог"))
-    blocks.append(("p", _verdict(report)))
-    drift_summary = summary["drift"]
-    rows = [[Severity(s), summary["findings_by_severity"][s]] for s in reversed(SEVERITIES)]
-    blocks.append(("table", ["Уровень", "Отклонений"], rows))
-    stats = [
+    blocks.append(("p", _compliance_verdict(report)))
+    blocks.append(("table", ["Уровень", "Нарушений"], [[Severity(s), summary["findings_by_severity"][s]] for s in reversed(SEVERITIES)]))
+    blocks.append(("table", ["Показатель", "Значение"], [
         ["Брандмауэры", snapshot["firewalls"]],
         ["Политики", snapshot["firewall_policies"]],
         ["IP-группы", snapshot["ip_groups"]],
         ["NSG", "не собирались" if snapshot["network_security_groups"] is None else snapshot["network_security_groups"]],
         ["Принятые исключения", summary["accepted_findings"]],
         ["Ошибки получения данных", summary["collection_errors"]],
-    ]
-    if drift_summary:
-        stats[4:4] = [
-            ["Изменения: добавлено / удалено / изменено / переименовано",
-             f"{drift_summary['added']} / {drift_summary['removed']} / {drift_summary['modified']} / {drift_summary['renamed']}"],
-        ]
-    blocks.append(("table", ["Показатель", "Значение"], stats))
+    ]))
+
+    blocks.append(("h2", "Нарушения стандарта"))
+    findings = report["findings"]
+    if findings:
+        blocks.append(("table", ["Уровень", "Проверка", "Объект", "Описание"], [
+            [Severity(f["severity"]), f["check"], f["object"], f"{f['title']}. {f['details']}"] for f in findings
+        ]))
+        blocks.append(("h3", "Рекомендации"))
+        checks = sorted({f["check"] for f in findings})
+        blocks.append(("table", ["Проверка", "Что не так", "Что сделать"], [
+            [check, CHECKS[check][0], CHECKS[check][1]] for check in checks
+        ]))
+    else:
+        blocks.append(("p", "Нарушений не обнаружено."))
+
+    if report["accepted_findings"] or report["exception_problems"]:
+        blocks.append(("h2", "Исключения"))
+        if report["accepted_findings"]:
+            blocks.append(("table", ["Уровень", "Проверка", "Объект", "Основание", "Действует до"], [
+                [Severity(f["severity"]), f["check"], f["object"], f["exception"]["reason"], f["exception"]["expires"] or "бессрочно"]
+                for f in report["accepted_findings"]
+            ]))
+        if report["exception_problems"]:
+            blocks.append(("table", ["Исключение", "Проблема"], [[p["exception"], p["problem"]] for p in report["exception_problems"]]))
 
     blocks.append(("h2", "Инвентаризация"))
     firewalls = report["inventory"]["firewalls"]
@@ -1959,85 +2111,13 @@ def report_blocks(report: dict) -> list[tuple]:
         ]))
     elif snapshot["network_security_groups"] == 0:
         blocks.append(("p", "NSG в заданной области не найдены."))
+    return blocks + _footer_blocks(report)
 
-    blocks.append(("h2", "Изменения относительно эталона"))
-    drift = report["drift"]
-    if drift is None:
-        blocks.append(("p", "Эталон не задан. Сохраните утверждённый снимок командой collect и передайте его в --baseline."))
-    else:
-        blocks.append(("p", f"Эталон: {fmt_time(drift['baseline_collected_at'])}, текущий снимок: {fmt_time(drift['current_collected_at'])}."))
-        if drift["scope_mismatch"]:
-            blocks.append(("p", "Внимание: область сбора эталона и текущего снимка различается — часть объектов может быть отмечена как добавленные или удалённые."))
-        for note in drift.get("notes") or []:
-            blocks.append(("p", note))
-        rows = []
-        for record in drift["added"]:
-            rows.append([record["label"], 1, "Добавлено", KIND_TITLES[record["kind"]], describe_entity(record["kind"], record["data"])])
-        for record in drift["removed"]:
-            rows.append([record["label"], 2, "Удалено", KIND_TITLES[record["kind"]], describe_entity(record["kind"], record["data"])])
-        for record in drift["renamed"]:
-            rows.append([record["label"], 3, "Переименовано", KIND_TITLES[record["kind"]], f"было: {record['old_label']}; {describe_entity(record['kind'], record['data'])}"])
-        for record in drift["modified"]:
-            for change in record["changes"]:
-                rows.append([record["label"], 4, "Изменено", KIND_TITLES[record["kind"]], describe_change(change)])
-        rows.sort(key=lambda row: (row[0].lower(), row[1]))
-        if rows:
-            blocks.append(("table", ["Объект", "Изменение", "Тип", "Подробности"], [[r[0], r[2], r[3], r[4]] for r in rows]))
-        else:
-            blocks.append(("p", "Конфигурация совпадает с эталоном."))
-        if drift["not_compared"]:
-            blocks.append(("h3", "Не сравнивались"))
-            blocks.append(("table", ["Объект", "Тип", "Причина"], [
-                [record["label"], KIND_TITLES[record["kind"]], record["reason"]] for record in drift["not_compared"]
-            ]))
 
-    activity = report.get("activity_log")
-    if activity:
-        blocks.append(("h2", "Журнал действий Azure"))
-        blocks.append(("p", f"Операции изменения брандмауэров, политик, IP-групп, NSG и диагностики с {fmt_time(activity['from'])} по {fmt_time(activity['to'])}."))
-        if activity.get("events"):
-            blocks.append(("table", ["Время", "Кто", "Операция", "Ресурс", "Статус"], [
-                [fmt_time(e["time"]), e["caller"] or "—", e["operation"].split("/", 1)[-1], _short_resource(e["resource_id"]), e["status"]]
-                for e in activity["events"]
-            ]))
-        else:
-            blocks.append(("p", "Операций изменения не найдено."))
-        for error in activity.get("errors") or []:
-            blocks.append(("p", f"Журнал действий {error['scope']} не прочитан: {_error_text(error)}"))
-
-    blocks.append(("h2", "Отклонения от стандарта"))
-    findings = report["findings"]
-    if findings:
-        blocks.append(("table", ["Уровень", "Проверка", "Объект", "Описание"], [
-            [Severity(f["severity"]), f["check"], f["object"], f"{f['title']}. {f['details']}"] for f in findings
-        ]))
-        blocks.append(("h3", "Рекомендации"))
-        checks = sorted({f["check"] for f in findings})
-        blocks.append(("table", ["Проверка", "Что не так", "Что сделать"], [
-            [check, CHECKS[check][0], CHECKS[check][1]] for check in checks
-        ]))
-    else:
-        blocks.append(("p", "Отклонений не обнаружено."))
-
-    if report["accepted_findings"] or report["exception_problems"]:
-        blocks.append(("h2", "Исключения"))
-        if report["accepted_findings"]:
-            blocks.append(("table", ["Уровень", "Проверка", "Объект", "Основание", "Действует до"], [
-                [Severity(f["severity"]), f["check"], f["object"], f["exception"]["reason"], f["exception"]["expires"] or "бессрочно"]
-                for f in report["accepted_findings"]
-            ]))
-        if report["exception_problems"]:
-            blocks.append(("table", ["Исключение", "Проблема"], [[p["exception"], p["problem"]] for p in report["exception_problems"]]))
-
-    if report["errors"]:
-        blocks.append(("h2", "Ошибки получения данных"))
-        blocks.append(("table", ["Объект", "Этап", "Код", "Сообщение"], [
-            [_short_resource(e["scope"]) if "/providers/" in e["scope"] else e["scope"], e["stage"], e.get("status") or "—", _error_text(e)]
-            for e in report["errors"]
-        ]))
-
-    blocks.append(("p", f"{TOOL_NAME} {TOOL_VERSION}: данные получены только GET-запросами к Azure Resource Manager; конфигурация не изменялась."))
-    return blocks
+def report_blocks(report: dict) -> list[tuple]:
+    """The report as a list of format-neutral blocks: ("h1"|"h2"|"h3"|"p", text),
+    ("kv", [(key, value)]) and ("table", headers, rows)."""
+    return _compliance_blocks(report) if report["kind"] == "compliance" else _drift_report_blocks(report)
 
 
 _MD_ESCAPE = str.maketrans({
@@ -2105,7 +2185,7 @@ def render_html(report: dict) -> str:
         "<!doctype html>",
         '<html lang="ru"><head><meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
-        "<title>Аудит Azure Firewall и NSG</title>",
+        f"<title>{html.escape(report['title'])} · Azure Firewall и NSG</title>",
         f"<style>{_HTML_STYLE}</style></head><body>",
     ]
     for block in report_blocks(report):
@@ -2130,6 +2210,161 @@ def render_json(report: dict) -> str:
 
 
 RENDERERS = {"md": render_markdown, "html": render_html, "json": render_json}
+
+
+# ---------------------------------------------------------------------------
+# Rocket.Chat notifications
+# ---------------------------------------------------------------------------
+
+NOTIFY_LEVELS = {
+    "errors": frozenset({EXIT_ERROR, EXIT_INCOMPLETE}),
+    "attention": frozenset({EXIT_ERROR, EXIT_INCOMPLETE, EXIT_ATTENTION}),
+    "always": frozenset({EXIT_OK, EXIT_ERROR, EXIT_ATTENTION, EXIT_INCOMPLETE}),
+}
+ROCKETCHAT_STATUS = {
+    EXIT_ERROR: ("#c62828", ":x:", "Аудит Azure Firewall и NSG не выполнен"),
+    EXIT_INCOMPLETE: ("#ef6c00", ":warning:", "Аудит Azure Firewall и NSG: часть конфигурации не прочитана"),
+    EXIT_ATTENTION: ("#f9a825", ":warning:", "Аудит Azure Firewall и NSG: превышены пороги"),
+    EXIT_OK: ("#2e7d32", ":white_check_mark:", "Аудит Azure Firewall и NSG: пороги не превышены"),
+}
+ROCKETCHAT_MAX_TEXT = 3500  # Rocket.Chat refuses messages over 5000 characters by default
+ROCKETCHAT_LIST_LIMIT = 10
+
+
+def notifier_session() -> requests.Session:
+    """Session for the webhook. Deliberately not read_only_session(): a webhook
+    needs POST, and nothing in Azure is ever called through this session."""
+    return requests.Session()
+
+
+class RocketChatNotifier:
+    """Posts the result of a run to a Rocket.Chat incoming webhook.
+
+    The webhook URL carries its secret token, so only the host is ever logged.
+    A failed notification is logged and does not change the exit code.
+    """
+
+    RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+    def __init__(
+        self,
+        webhook_url: str,
+        *,
+        level: str = "errors",
+        timeout: float = 15.0,
+        attempts: int = 3,
+        session: Any = None,
+        sleep: Callable[[float], None] | None = None,
+    ):
+        parsed = urlparse(webhook_url)
+        if parsed.scheme not in ("https", "http") or not parsed.netloc:
+            raise ConfigError("адрес вебхука Rocket.Chat должен иметь вид https://<сервер>/hooks/<id>/<токен>")
+        if parsed.scheme == "http":
+            log.warning("вебхук Rocket.Chat задан по http: его токен передаётся открытым текстом")
+        if level not in NOTIFY_LEVELS:
+            raise ConfigError(f"--notify: допустимы {', '.join(NOTIFY_LEVELS)}, получено {level!r}")
+        self.host = parsed.netloc
+        self.level = level
+        self._url = webhook_url
+        self._timeout = timeout
+        self._attempts = attempts
+        self._session = session or notifier_session()
+        self._sleep = sleep or time.sleep
+
+    def wants(self, code: int) -> bool:
+        return code in NOTIFY_LEVELS[self.level]
+
+    def send(self, payload: dict) -> bool:
+        problem = ""
+        for attempt in range(1, self._attempts + 1):
+            try:
+                response = self._session.post(self._url, json=payload, timeout=self._timeout)
+            except requests.RequestException as exc:
+                problem = type(exc).__name__  # the exception text contains the URL, i.e. the token
+            else:
+                if 200 <= response.status_code < 300:
+                    log.info("уведомление отправлено в Rocket.Chat (%s)", self.host)
+                    return True
+                problem = f"HTTP {response.status_code}"
+                if response.status_code not in self.RETRY_STATUSES:
+                    break
+            if attempt < self._attempts:
+                self._sleep(2 * attempt)
+        log.warning("не удалось отправить уведомление в Rocket.Chat (%s): %s", self.host, problem)
+        return False
+
+
+def _drift_line(kind: str, report: dict) -> str:
+    drift = report["summary"]["drift"]
+    if drift is None:
+        state = "предыдущий снимок не найден" if kind == "changes" else "эталон не задан"
+    elif drift["total"]:
+        state = (f"{drift['total']} (добавлено {drift['added']}, удалено {drift['removed']}, "
+                 f"изменено {drift['modified']}, переименовано {drift['renamed']})")
+    else:
+        state = "нет"
+    if drift and drift["not_compared"]:
+        state += f"; не сравнивались: {drift['not_compared']}"  # unreadable now, so "нет" is not a clean bill
+    return f"{REPORT_TITLES[kind]}: {state}"
+
+
+def rocketchat_payload(command: str, code: int, outcome: dict, host: str | None = None) -> dict:
+    """Message for an incoming webhook: what failed, what is missing, what was found."""
+    color, emoji, title = ROCKETCHAT_STATUS[code]
+    reports = outcome.get("reports") or {}
+    lines: list[str] = []
+    if outcome.get("error"):
+        lines += ["Ошибка:", "```", str(outcome["error"])[:1500], "```"]
+
+    unread = [error for error in outcome.get("errors") or [] if error.get("incomplete", True)]
+    if unread:
+        lines.append(f"Не прочитано: {len(unread)}")
+        for error in unread[:ROCKETCHAT_LIST_LIMIT]:
+            scope = _short_resource(error["scope"]) if "/providers/" in error["scope"] else error["scope"]
+            lines.append(f"• `{scope}` ({error.get('stage')}, {error.get('status') or 'сетевая ошибка'}): {_error_text(error)}")
+        if len(unread) > ROCKETCHAT_LIST_LIMIT:
+            lines.append(f"• и ещё {len(unread) - ROCKETCHAT_LIST_LIMIT}")
+
+    if reports:
+        lines += [_drift_line("changes", reports["changes"]), _drift_line("drift", reports["drift"])]
+        summary = reports["compliance"]["summary"]
+        counts = summary["findings_by_severity"]
+        details = ", ".join(f"{SEVERITY_TITLES[s].lower()} {counts[s]}" for s in reversed(SEVERITIES) if counts[s])
+        lines.append(f"{REPORT_TITLES['compliance']}: {summary['findings_total']} ({details})" if summary["findings_total"]
+                     else f"{REPORT_TITLES['compliance']}: нет")
+        for finding in reports["compliance"]["findings"][:5]:  # most severe first
+            lines.append(f"• {SEVERITY_TITLES[finding['severity']]} · {finding['check']} · `{finding['object']}`")
+    if outcome.get("triggers"):
+        lines.append("Сработали пороги: " + ", ".join(outcome["triggers"]))
+    files = outcome.get("files") or []
+    if files:
+        shown = [path for path in files if path.endswith(".html")] or files
+        lines.append(f"Файлы: `{Path(shown[0]).parent}` — " + ", ".join(Path(path).name for path in shown[:4]))
+
+    text = "\n".join(lines)
+    if len(text) > ROCKETCHAT_MAX_TEXT:
+        text = text[: ROCKETCHAT_MAX_TEXT - 1] + "…"
+    fields = [
+        {"title": "Команда", "value": command, "short": True},
+        {"title": "Код выхода", "value": str(code), "short": True},
+        {"title": "Узел", "value": host or socket.gethostname(), "short": True},
+    ]
+    scope = ((reports.get("compliance") or {}).get("snapshot") or {}).get("scope") or outcome.get("scope")
+    if scope:
+        fields.append({"title": "Область", "value": _scope_text(scope), "short": False})
+    attachment = {"color": color, "fields": fields}
+    if text:
+        attachment["text"] = text
+    return {"alias": TOOL_NAME, "text": f"{emoji} *{title}*", "attachments": [attachment]}
+
+
+def make_notifier(args: argparse.Namespace) -> RocketChatNotifier | None:
+    # The URL comes from the environment by default: on the command line the
+    # token would be visible to other users of the machine.
+    url = args.rocketchat_webhook or os.getenv("ROCKETCHAT_WEBHOOK_URL")
+    if not url:
+        return None
+    return RocketChatNotifier(url, level=args.notify or os.getenv("ROCKETCHAT_NOTIFY") or "errors")
 
 
 # ---------------------------------------------------------------------------
@@ -2205,34 +2440,73 @@ def _stamp(snapshot: dict) -> str:
     return parse_time(snapshot["collected_at"]).strftime("%Y%m%dT%H%M%SZ")
 
 
-def _exit_code(report: dict, fail_on: str, fail_on_drift: bool) -> int:
-    summary = report["summary"]
-    counts = summary["findings_by_severity"]
-    drift = summary["drift"]
+def _days_since(collected_at: str) -> int:
+    elapsed = (utcnow() - parse_time(collected_at)).total_seconds() / 86400
+    return max(1, min(ACTIVITY_LOG_MAX_DAYS, math.ceil(elapsed)))
+
+
+def _kinds(args: argparse.Namespace) -> list[str]:
+    return list(dict.fromkeys(args.kind)) if args.kind else list(REPORT_KINDS)
+
+
+def find_previous_snapshot(directory: Path) -> tuple[Path, dict] | None:
+    """The newest readable azfw-snapshot-*.json in the directory (names sort by time)."""
+    if not directory.is_dir():
+        return None
+    for path in sorted(directory.glob("azfw-snapshot-*.json"), reverse=True):
+        try:
+            return path, load_snapshot(path)
+        except ConfigError as exc:
+            log.warning("предыдущий снимок пропущен: %s", exc)
+    return None
+
+
+def evaluate(reports: dict[str, dict], fail_on: str, fail_on_drift: bool, fail_on_change: bool) -> tuple[int, list[str]]:
+    """Exit code and the thresholds that were exceeded."""
+    compliance = reports["compliance"]["summary"]
+    counts = compliance["findings_by_severity"]
+    changes = reports["changes"]["summary"]["drift"]
+    drift = reports["drift"]["summary"]["drift"]
     log.info(
-        "отклонений: %d (%s); изменений: %s; ошибок чтения: %d",
-        summary["findings_total"],
-        ", ".join(f"{s}={counts[s]}" for s in reversed(SEVERITIES) if counts[s]) or "нет",
+        "изменений с прошлого сбора: %s; отличий от эталона: %s; нарушений стандарта: %d (%s); ошибок чтения: %d",
+        changes["total"] if changes else "нет предыдущего снимка",
         drift["total"] if drift else "эталон не задан",
-        summary["collection_errors"],
+        compliance["findings_total"],
+        ", ".join(f"{s}={counts[s]}" for s in reversed(SEVERITIES) if counts[s]) or "нет",
+        compliance["collection_errors"],
     )
-    if summary["incomplete"]:
-        return EXIT_INCOMPLETE
+    triggers = []
     if fail_on != "none" and any(counts[s] for s in SEVERITIES if SEVERITY_RANK[s] >= SEVERITY_RANK[fail_on]):
-        return EXIT_ATTENTION
+        triggers.append(f"--fail-on {fail_on}")
     if fail_on_drift and drift and drift["total"]:
-        return EXIT_ATTENTION
-    return EXIT_OK
+        triggers.append("--fail-on-drift")
+    if fail_on_change and changes and changes["total"]:
+        triggers.append("--fail-on-change")
+    if compliance["incomplete"]:
+        return EXIT_INCOMPLETE, triggers
+    return (EXIT_ATTENTION if triggers else EXIT_OK), triggers
 
 
-def _write_reports(report: dict, formats: list[str], output_dir: Path, stamp: str) -> None:
-    for fmt in formats:
-        write_text(output_dir / f"azfw-report-{stamp}.{fmt}", RENDERERS[fmt](report))
+def _write_reports(reports: dict[str, dict], kinds: list[str], formats: list[str], output_dir: Path, stamp: str) -> list[str]:
+    paths = []
+    for kind in kinds:
+        for fmt in formats:
+            path = output_dir / f"azfw-{kind}-{stamp}.{fmt}"
+            write_text(path, RENDERERS[fmt](reports[kind]))
+            paths.append(str(path))
+    return paths
+
+
+def _finish(args: argparse.Namespace, reports: dict[str, dict], files: list[str]) -> int:
+    code, triggers = evaluate(reports, args.fail_on, args.fail_on_drift, args.fail_on_change)
+    args.outcome.update(reports=reports, triggers=triggers, files=files, errors=reports["compliance"]["errors"])
+    return code
 
 
 def cmd_collect(args: argparse.Namespace) -> int:
     snapshot = _collect(args, args.activity_days or 0)
     write_snapshot(Path(args.output), snapshot)
+    args.outcome.update(errors=snapshot["errors"], scope=snapshot["scope"], files=[str(args.output)])
     log.info("брандмауэров: %d, политик: %d, IP-групп: %d, NSG: %s, ошибок: %d",
              len(snapshot["firewalls"]), len(snapshot["firewall_policies"]), len(snapshot["ip_groups"]),
              "не собирались" if snapshot["network_security_groups"] is None else len(snapshot["network_security_groups"]),
@@ -2242,47 +2516,65 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
 def cmd_report(args: argparse.Namespace) -> int:
     formats = _formats(args.format)
+    kinds = _kinds(args)
+    if not args.output_dir and len(kinds) != 1:
+        raise ConfigError("в файл (-o) и в stdout выводится один отчёт: укажите --kind changes, drift или compliance "
+                          "либо --output-dir для всех трёх отчётов")
     current = load_snapshot(args.current)
+    previous = load_snapshot(args.previous) if args.previous else None
     baseline = load_snapshot(args.baseline) if args.baseline else None
     standard, source = _standard_from_args(args)
-    report = build_report(current, baseline, standard, source)
+    reports = build_reports(current, previous, baseline, standard, source)
+    files: list[str] = []
     if args.output:
         output = Path(args.output)
         fmt = output.suffix.lstrip(".").lower()
         if fmt not in RENDERERS:
             raise ConfigError(f"{output}: расширение должно быть .md, .html или .json")
-        write_text(output, RENDERERS[fmt](report))
+        write_text(output, RENDERERS[fmt](reports[kinds[0]]))
+        files = [str(output)]
     elif args.output_dir:
-        _write_reports(report, formats, Path(args.output_dir), _stamp(current))
+        files = _write_reports(reports, kinds, formats, Path(args.output_dir), _stamp(current))
     else:
-        sys.stdout.write(RENDERERS[formats[0]](report))
-    return _exit_code(report, args.fail_on, args.fail_on_drift)
+        sys.stdout.write(RENDERERS[formats[0]](reports[kinds[0]]))
+    return _finish(args, reports, files)
 
 
 def cmd_run(args: argparse.Namespace) -> int:
     formats = _formats(args.format)
+    kinds = _kinds(args)
+    output_dir = Path(args.output_dir)
     baseline = load_snapshot(args.baseline) if args.baseline else None
+    if args.previous:
+        previous_path, previous = Path(args.previous), load_snapshot(args.previous)
+    else:
+        # The previous run left its snapshot here: report 1 compares with it.
+        previous_path, previous = find_previous_snapshot(output_dir) or (None, None)
+    log.info("предыдущий снимок: %s", previous_path or "не найден")
     standard, source = _standard_from_args(args)
     days = args.activity_days
     if days is None:
-        # By default read the Activity Log back to the baseline: who changed what since then.
-        if baseline:
-            elapsed = (utcnow() - parse_time(baseline["collected_at"])).total_seconds() / 86400
-            days = max(1, min(ACTIVITY_LOG_MAX_DAYS, math.ceil(elapsed)))
-        else:
-            days = 0
+        # By default read the Activity Log back to the oldest snapshot compared with.
+        references = [snapshot["collected_at"] for snapshot in (baseline, previous) if snapshot]
+        days = _days_since(min(references)) if references else 0
     snapshot = _collect(args, days)
-    output_dir = Path(args.output_dir)
     stamp = _stamp(snapshot)
-    write_snapshot(output_dir / f"azfw-snapshot-{stamp}.json", snapshot)
-    report = build_report(snapshot, baseline, standard, source)
-    _write_reports(report, formats, output_dir, stamp)
-    return _exit_code(report, args.fail_on, args.fail_on_drift)
+    snapshot_path = output_dir / f"azfw-snapshot-{stamp}.json"
+    write_snapshot(snapshot_path, snapshot)
+    reports = build_reports(snapshot, previous, baseline, standard, source)
+    return _finish(args, reports, [str(snapshot_path)] + _write_reports(reports, kinds, formats, output_dir, stamp))
 
 
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("-v", "--verbose", action="store_true", help="подробный журнал")
+    group = common.add_argument_group("уведомления Rocket.Chat")
+    group.add_argument("--rocketchat-webhook", metavar="URL",
+                       help="адрес входящего вебхука Rocket.Chat; по умолчанию переменная ROCKETCHAT_WEBHOOK_URL "
+                            "(в командной строке адрес с токеном видят другие пользователи системы)")
+    group.add_argument("--notify", choices=tuple(NOTIFY_LEVELS), default=None,
+                       help="когда отправлять: errors — ошибки и неполные данные (по умолчанию, или ROCKETCHAT_NOTIFY), "
+                            "attention — также превышение порогов, always — после каждого запуска")
 
     collect = argparse.ArgumentParser(add_help=False)
     group = collect.add_argument_group("сбор конфигурации (только чтение)")
@@ -2296,25 +2588,33 @@ def build_parser() -> argparse.ArgumentParser:
     group.add_argument("--no-nsg", action="store_true", help="не читать Network Security Groups")
     group.add_argument("--no-diagnostics", action="store_true", help="не читать параметры диагностики")
     group.add_argument("--activity-days", type=int, default=None,
-                       help="читать журнал действий Azure за N дней (0 — не читать; в run по умолчанию — с даты эталона)")
+                       help="читать журнал действий Azure за N дней (0 — не читать; в run по умолчанию — "
+                            "с даты самого старого из сравниваемых снимков)")
     group.add_argument("--arm-endpoint", default=os.getenv("AZURE_ARM_ENDPOINT", DEFAULT_ARM_ENDPOINT),
                        help=f"адрес Resource Manager (по умолчанию {DEFAULT_ARM_ENDPOINT})")
     group.add_argument("--api-version", default=NETWORK_API_VERSION, help=f"версия API Microsoft.Network (по умолчанию {NETWORK_API_VERSION})")
     group.add_argument("--timeout", type=float, default=60.0, help="тайм-аут запроса, с")
 
     report = argparse.ArgumentParser(add_help=False)
-    group = report.add_argument_group("отчёт")
-    group.add_argument("-b", "--baseline", help="эталонный снимок для поиска изменений")
-    group.add_argument("--standard", help="стандарт конфигурации (YAML); по умолчанию standard.yaml рядом со скриптом")
+    group = report.add_argument_group("отчёты")
+    group.add_argument("-p", "--previous",
+                       help="предыдущий снимок для отчёта «Изменения с прошлого сбора»; в run по умолчанию — "
+                            "последний снимок в --output-dir")
+    group.add_argument("-b", "--baseline", help="эталонный снимок для отчёта «Отличия от эталона»")
+    group.add_argument("--standard", help="стандарт ИБ (YAML) для отчёта «Нарушения стандарта ИБ»; "
+                                          "по умолчанию standard.yaml рядом со скриптом")
+    group.add_argument("--kind", action="append", choices=REPORT_KINDS, default=[],
+                       help="какие отчёты формировать: changes, drift, compliance; можно несколько раз (по умолчанию все)")
     group.add_argument("--fail-on", choices=("none",) + SEVERITIES, default="none",
-                       help="код выхода 2, если есть отклонения этого уровня или выше")
+                       help="код выхода 2, если есть нарушения стандарта этого уровня или выше")
     group.add_argument("--fail-on-drift", action="store_true", help="код выхода 2, если конфигурация отличается от эталона")
+    group.add_argument("--fail-on-change", action="store_true", help="код выхода 2, если конфигурация изменилась с прошлого сбора")
 
     parser = argparse.ArgumentParser(
         prog="azfw_audit.py",
-        description="Аудит конфигурации Azure Firewall и Network Security Groups только на чтение: снимок, "
-                    "изменения относительно эталона, отклонения от стандарта, отчёт.",
-        epilog="Коды выхода: 0 — норма, 1 — ошибка, 2 — сработали --fail-on/--fail-on-drift, "
+        description="Аудит конфигурации Azure Firewall и Network Security Groups только на чтение: снимок и три "
+                    "отчёта — изменения с прошлого сбора, отличия от эталона, нарушения стандарта ИБ.",
+        epilog="Коды выхода: 0 — норма, 1 — ошибка, 2 — сработали --fail-on/--fail-on-drift/--fail-on-change, "
                "3 — часть конфигурации не прочитана.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
@@ -2323,31 +2623,46 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_argument("-o", "--output", required=True, help="файл снимка (JSON)")
     sub.set_defaults(handler=cmd_collect)
 
-    sub = commands.add_parser("report", parents=[common, report], help="отчёт по сохранённому снимку (без обращения к Azure)")
+    sub = commands.add_parser("report", parents=[common, report], help="отчёты по сохранённым снимкам (без обращения к Azure)")
     sub.add_argument("-c", "--current", required=True, help="текущий снимок")
     sub.add_argument("--format", default="md", help="md, html, json или список через запятую (по умолчанию md)")
     target = sub.add_mutually_exclusive_group()
-    target.add_argument("-o", "--output", help="файл отчёта; формат по расширению .md/.html/.json")
+    target.add_argument("-o", "--output", help="файл одного отчёта (--kind); формат по расширению .md/.html/.json")
     target.add_argument("--output-dir", help="каталог для отчётов во всех форматах из --format")
     sub.set_defaults(handler=cmd_report)
 
-    sub = commands.add_parser("run", parents=[common, collect, report], help="собрать снимок и сразу сформировать отчёт")
-    sub.add_argument("--output-dir", required=True, help="каталог для снимка и отчётов")
-    sub.add_argument("--format", default="md,html,json", help="форматы отчёта (по умолчанию md,html,json)")
+    sub = commands.add_parser("run", parents=[common, collect, report], help="собрать снимок и сформировать три отчёта")
+    sub.add_argument("--output-dir", required=True, help="каталог для снимков и отчётов; здесь же ищется предыдущий снимок")
+    sub.add_argument("--format", default="md,html,json", help="форматы отчётов (по умолчанию md,html,json)")
     sub.set_defaults(handler=cmd_run)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    try:
+        args = build_parser().parse_args(argv)
+    except SystemExit as exc:
+        # argparse exits with 2 on a usage error; here 2 means "thresholds exceeded".
+        return EXIT_ERROR if exc.code == 2 else int(exc.code or 0)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s: %(message)s")
     if not args.verbose:
         logging.getLogger("azure").setLevel(logging.WARNING)
+    args.outcome = {}
+    notifier = None
     try:
-        return args.handler(args)
+        notifier = make_notifier(args)
+        code = args.handler(args)
     except (ConfigError, AuthError, ArmError, ReadOnlyViolation) as exc:
         log.error("%s", exc)
-        return EXIT_ERROR
+        args.outcome["error"] = str(exc)
+        code = EXIT_ERROR
+    except Exception as exc:  # a scheduled run has to report even an unexpected failure
+        log.exception("непредвиденная ошибка")
+        args.outcome["error"] = f"{type(exc).__name__}: {exc}"
+        code = EXIT_ERROR
+    if notifier is not None and notifier.wants(code):
+        notifier.send(rocketchat_payload(args.command, code, args.outcome))
+    return code
 
 
 if __name__ == "__main__":

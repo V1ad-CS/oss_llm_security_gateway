@@ -1,12 +1,15 @@
 import copy
 import datetime as dt
 import json
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlparse
 
 import pytest
+import requests
 
 import azfw_audit as audit
 
@@ -210,9 +213,9 @@ def test_unreadable_policy_is_not_reported_as_removed(baseline):
     assert drift["removed"] == []
     assert {r["label"] for r in drift["not_compared"]} >= {"rg-security/fwpol-base-global"}
 
-    report = audit.build_report(snapshot, baseline)
-    assert report["summary"]["incomplete"] is True
-    assert audit._exit_code(report, "none", False) == audit.EXIT_INCOMPLETE
+    reports = audit.build_reports(snapshot, baseline=baseline)
+    assert all(report["summary"]["incomplete"] for report in reports.values())
+    assert audit.evaluate(reports, "none", False, False) == (audit.EXIT_INCOMPLETE, [])
 
 
 def test_missing_named_firewall_counts_as_removed(baseline):
@@ -556,7 +559,7 @@ def test_snapshot_without_nsgs_skips_the_section(baseline, current):
     assert not [r for r in drift["added"] + drift["not_compared"] if r["kind"].startswith(("network_security", "security_rule"))]
     assert drift["summary"]["total"] == 8  # the firewall changes are still found
 
-    report = audit.build_report(old)
+    report = audit.build_reports(old)["compliance"]
     assert report["snapshot"]["network_security_groups"] is None
     assert "| NSG | не собирались |" in audit.render_markdown(report)
 
@@ -605,7 +608,7 @@ def test_html_and_markdown_escape_configuration_text(current):
     rules = [r for g in groups for c in g["properties"]["ruleCollections"] for r in c["rules"]]
     rule = next(r for r in rules if r["name"] == "temp-any-any")  # has a finding, so it is in the report
     rule["name"] = "<script>alert(1)</script>|x"
-    report = audit.build_report(current)
+    report = audit.build_reports(current)["compliance"]
     html_text = audit.render_html(report)
     assert "<script>alert(1)</script>" not in html_text
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html_text.replace("<wbr>", "")
@@ -613,32 +616,78 @@ def test_html_and_markdown_escape_configuration_text(current):
     assert "&lt;script&gt;alert(1)&lt;/script&gt;\\|x" in markdown
 
 
-def test_report_command_writes_all_formats(tmp_path):
-    code = audit.main([
-        "report", "--current", str(EXAMPLES / "current.snapshot.json"), "--baseline", str(EXAMPLES / "baseline.snapshot.json"),
-        "--standard", str(ROOT / "standard.yaml"), "--format", "md,html,json", "--output-dir", str(tmp_path),
-    ])
+def example_args(*extra):
+    return ["report", "-c", str(EXAMPLES / "current.snapshot.json"), "-p", str(EXAMPLES / "previous.snapshot.json"),
+            "-b", str(EXAMPLES / "baseline.snapshot.json"), "--standard", str(ROOT / "standard.yaml"), *extra]
+
+
+def test_three_reports_on_example_snapshots(current, baseline):
+    previous = load("previous")
+    reports = audit.build_reports(current, previous, baseline, audit.load_standard(ROOT / "standard.yaml"))
+    assert list(reports) == ["changes", "drift", "compliance"]
+
+    changes, drift, compliance = reports["changes"], reports["drift"], reports["compliance"]
+    # 1: since the run of 21 October only the two NSG changes happened
+    assert changes["reference"]["collected_at"] == "2026-10-21T08:00:00Z"
+    assert {(r["label"], c["path"]) for r in changes["drift"]["modified"] for c in r["changes"]} == {
+        ("rg-app/nsg-snet-web/allow-https-in", "destinationPortRanges"),
+        ("rg-app/nsg-snet-db", "properties.subnets"),
+    }
+    assert [e["time"][:10] for e in changes["activity_log"]["events"]] == ["2026-10-22", "2026-10-23"]
+    # 2: everything since the baseline, with the whole Activity Log window
+    assert drift["drift"]["summary"]["total"] == 11
+    assert len(drift["activity_log"]["events"]) == len(current["activity_log"]["events"])
+    # 3: the standard, independent of any reference snapshot
+    assert compliance["summary"]["findings_total"] == 13
+    assert "drift" not in compliance and "findings" not in changes
+
+
+def test_reports_without_previous_or_baseline(current):
+    reports = audit.build_reports(current)
+    for kind in ("changes", "drift"):
+        assert reports[kind]["drift"] is None and reports[kind]["activity_log"] is None
+        assert audit.NO_REFERENCE_TEXTS[kind] in audit.render_markdown(reports[kind])
+    assert audit.evaluate(reports, "none", True, True) == (audit.EXIT_OK, [])
+
+
+def test_report_command_writes_three_reports(tmp_path):
+    code = audit.main(example_args("--format", "md,html,json", "--output-dir", str(tmp_path)))
     assert code == audit.EXIT_OK
-    names = sorted(p.name for p in tmp_path.iterdir())
-    assert names == ["azfw-report-20261027T080000Z.html", "azfw-report-20261027T080000Z.json", "azfw-report-20261027T080000Z.md"]
-    report = json.loads((tmp_path / names[1]).read_text(encoding="utf-8"))
-    assert report["summary"]["findings_by_severity"]["critical"] == 1
-    assert report["summary"]["drift"]["total"] == 11
-    markdown = (tmp_path / names[2]).read_text(encoding="utf-8")
-    assert "## Изменения относительно эталона" in markdown
-    assert "contractor@example.com" in markdown
+    stamp = "20261027T080000Z"
+    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
+        f"azfw-{kind}-{stamp}.{fmt}" for kind in ("changes", "drift", "compliance") for fmt in ("md", "html", "json"))
+
+    compliance = json.loads((tmp_path / f"azfw-compliance-{stamp}.json").read_text(encoding="utf-8"))
+    assert compliance["kind"] == "compliance" and compliance["summary"]["findings_by_severity"]["critical"] == 1
+    drift = json.loads((tmp_path / f"azfw-drift-{stamp}.json").read_text(encoding="utf-8"))
+    assert drift["summary"]["drift"]["total"] == 11
+    changes = (tmp_path / f"azfw-changes-{stamp}.md").read_text(encoding="utf-8")
+    assert changes.startswith("# Изменения с прошлого сбора")
+    assert "app-deploy@example.com" in changes and "contractor@example.com" not in changes  # only after 21 October
+    html_text = (tmp_path / f"azfw-drift-{stamp}.html").read_text(encoding="utf-8")
+    assert "<title>Отличия от эталона · Azure Firewall и NSG</title>" in html_text
+
+
+def test_report_kind_selection(tmp_path):
+    code = audit.main(example_args("--kind", "drift", "--kind", "compliance", "--format", "json", "--output-dir", str(tmp_path)))
+    assert code == audit.EXIT_OK
+    assert sorted(p.name.split("-")[1] for p in tmp_path.iterdir()) == ["compliance", "drift"]
+    # One file or stdout takes exactly one report.
+    assert audit.main(example_args("-o", str(tmp_path / "r.md"))) == audit.EXIT_ERROR
+    assert audit.main(example_args("--kind", "changes", "-o", str(tmp_path / "r.md"))) == audit.EXIT_OK
+    assert (tmp_path / "r.md").read_text(encoding="utf-8").startswith("# Изменения с прошлого сбора")
 
 
 @pytest.mark.parametrize("flags, expected", [
     ([], audit.EXIT_OK),
     (["--fail-on", "critical"], audit.EXIT_ATTENTION),
     (["--fail-on-drift"], audit.EXIT_ATTENTION),
+    (["--fail-on-change"], audit.EXIT_ATTENTION),
 ])
 def test_exit_codes(tmp_path, flags, expected):
     output = tmp_path / "report.md"
-    code = audit.main(["report", "-c", str(EXAMPLES / "current.snapshot.json"), "-b", str(EXAMPLES / "baseline.snapshot.json"),
-                       "-o", str(output), *flags])
-    assert code == expected
+    code = audit.main(example_args("--kind", "compliance", "-o", str(output), *flags))
+    assert code == expected  # thresholds apply to all three reports, whichever is written
     assert output.exists()
 
 
@@ -650,24 +699,235 @@ def test_unchanged_compliant_configuration_passes(tmp_path):
         "  - {check: '*', object: 'rg-dmz/*', reason: 'legacy DMZ, decommissioning'}\n",
         encoding="utf-8",
     )
-    code = audit.main(["report", "-c", snapshot, "-b", snapshot, "--standard", str(standard), "-o", str(tmp_path / "r.json"),
-                       "--fail-on", "info", "--fail-on-drift"])
+    code = audit.main(["report", "-c", snapshot, "-p", snapshot, "-b", snapshot, "--standard", str(standard),
+                       "--output-dir", str(tmp_path), "--fail-on", "info", "--fail-on-drift", "--fail-on-change"])
     assert code == audit.EXIT_OK
 
 
-def test_run_command_collects_and_reports(tmp_path, baseline, monkeypatch):
+def test_run_compares_with_the_previous_snapshot(tmp_path, baseline, monkeypatch):
     client, session = make_client(routes_from_snapshot(baseline))
     monkeypatch.setattr(audit, "make_client", lambda endpoint, timeout: client)
+    # Snapshots of earlier runs: the newest readable one is the previous collection.
+    older = copy.deepcopy(baseline)
+    older["firewalls"] = {}
+    (tmp_path / "azfw-snapshot-20260901T080000Z.json").write_text(json.dumps(older), encoding="utf-8")
+    (tmp_path / "azfw-snapshot-20261001T080000Z.json").write_text(json.dumps(baseline), encoding="utf-8")
+    (tmp_path / "azfw-snapshot-20261002T080000Z.json").write_text("{broken", encoding="utf-8")
+
     code = audit.main(["run", "-s", SUB, "--baseline", str(EXAMPLES / "baseline.snapshot.json"),
-                       "--activity-days", "0", "--output-dir", str(tmp_path), "--format", "json", "--fail-on-drift"])
+                       "--activity-days", "0", "--output-dir", str(tmp_path), "--format", "json",
+                       "--fail-on-drift", "--fail-on-change"])
     assert code == audit.EXIT_OK
-    snapshot = next(tmp_path.glob("azfw-snapshot-*.json"))
-    assert audit.load_snapshot(snapshot)["firewalls"].keys() == baseline["firewalls"].keys()
-    assert len(list(tmp_path.glob("azfw-report-*.json"))) == 1
-    assert session.calls  # everything went through the GET-only fake
+    changes = json.loads(next(tmp_path.glob("azfw-changes-*.json")).read_text(encoding="utf-8"))
+    assert changes["reference"]["collected_at"] == baseline["collected_at"]
+    assert changes["summary"]["drift"]["total"] == 0
+    assert len(list(tmp_path.glob("azfw-snapshot-*.json"))) == 4
+    assert all(call["url"].startswith(audit.DEFAULT_ARM_ENDPOINT) for call in session.calls)
+
+
+def test_find_previous_snapshot(tmp_path):
+    assert audit.find_previous_snapshot(tmp_path / "missing") is None
+    assert audit.find_previous_snapshot(tmp_path) is None
+    (tmp_path / "azfw-snapshot-20261001T000000Z.json").write_text(json.dumps(load("baseline")), encoding="utf-8")
+    (tmp_path / "azfw-snapshot-20261101T000000Z.json").write_text("[]", encoding="utf-8")
+    path, snapshot = audit.find_previous_snapshot(tmp_path)
+    assert path.name == "azfw-snapshot-20261001T000000Z.json"
+    assert snapshot["collected_at"] == "2026-10-01T08:00:00Z"
+
+
+def test_usage_error_is_not_mistaken_for_findings(capsys):
+    assert audit.main(["report"]) == audit.EXIT_ERROR  # argparse alone would exit with 2
+    assert audit.main(["--help"]) == audit.EXIT_OK
+    assert "usage:" in capsys.readouterr().out
 
 
 def test_bad_snapshot_is_an_error(tmp_path):
     path = tmp_path / "x.json"
     path.write_text("{}", encoding="utf-8")
-    assert audit.main(["report", "-c", str(path)]) == audit.EXIT_ERROR
+    assert audit.main(["report", "-c", str(path), "--kind", "compliance"]) == audit.EXIT_ERROR
+
+
+# ---------------------------------------------------------------------------
+# Rocket.Chat
+# ---------------------------------------------------------------------------
+
+WEBHOOK = "https://chat.example.com/hooks/abc123/secret-token"
+
+
+class FakeChat:
+    """Webhook double: records every POST."""
+
+    def __init__(self):
+        self.posts = []
+        self.responses = [FakeResponse(200, {"success": True})]
+        self.error = None
+
+    def post(self, url, json=None, timeout=None, **kwargs):
+        assert not kwargs, "nothing but the JSON body goes to Rocket.Chat"
+        self.posts.append({"url": url, "json": json})
+        if self.error:
+            raise self.error
+        return self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]
+
+
+@pytest.fixture
+def chat(monkeypatch):
+    fake = FakeChat()
+    monkeypatch.setattr(audit, "notifier_session", lambda: fake)
+    monkeypatch.setattr(audit.time, "sleep", lambda seconds: None)
+    monkeypatch.setenv("ROCKETCHAT_WEBHOOK_URL", WEBHOOK)
+    monkeypatch.delenv("ROCKETCHAT_NOTIFY", raising=False)
+    return fake
+
+
+def message_text(post):
+    attachment = post["json"]["attachments"][0]
+    fields = {field["title"]: field["value"] for field in attachment["fields"]}
+    return post["json"]["text"], attachment.get("text", ""), attachment["color"], fields
+
+
+def test_fatal_error_goes_to_rocketchat(chat, tmp_path):
+    path = tmp_path / "x.json"
+    path.write_text("{}", encoding="utf-8")
+    assert audit.main(["report", "-c", str(path), "--kind", "compliance"]) == audit.EXIT_ERROR
+    assert [post["url"] for post in chat.posts] == [WEBHOOK]
+    title, text, color, fields = message_text(chat.posts[0])
+    assert title == ":x: *Аудит Azure Firewall и NSG не выполнен*"
+    assert "не снимок azfw-audit" in text and color == "#c62828"
+    assert fields["Команда"] == "report" and fields["Код выхода"] == "1"
+
+
+def test_unexpected_crash_goes_to_rocketchat(chat, monkeypatch):
+    monkeypatch.setattr(audit, "build_parser", _parser_with_handler(lambda args: 1 / 0))
+    assert audit.main(["report", "-c", "x"]) == audit.EXIT_ERROR
+    assert "ZeroDivisionError" in message_text(chat.posts[0])[1]
+
+
+def _parser_with_handler(handler):
+    original = audit.build_parser
+
+    def build():
+        parser = original()
+        for action in parser._subparsers._group_actions:
+            for sub in action.choices.values():
+                sub.set_defaults(handler=handler)
+        return parser
+    return build
+
+
+def test_incomplete_run_goes_to_rocketchat(chat, tmp_path, baseline, monkeypatch):
+    routes = routes_from_snapshot(baseline)
+    routes[POL_BASE] = FakeResponse(403, {"error": {"code": "AuthorizationFailed", "message": "denied"}})
+    client, _ = make_client(routes)
+    monkeypatch.setattr(audit, "make_client", lambda endpoint, timeout: client)
+    code = audit.main(["run", "-s", SUB, "--baseline", str(EXAMPLES / "baseline.snapshot.json"),
+                       "--activity-days", "0", "--output-dir", str(tmp_path), "--format", "html"])
+    assert code == audit.EXIT_INCOMPLETE
+    title, text, color, fields = message_text(chat.posts[0])
+    assert title.startswith(":warning:") and color == "#ef6c00" and fields["Код выхода"] == "3"
+    assert "Не прочитано: 1" in text and "fwpol-base-global" in text and "403" in text and "Reader" in text
+    assert "Отличия от эталона: нет; не сравнивались: 4" in text and "Нарушения стандарта ИБ:" in text
+    assert f"Файлы: `{tmp_path}`" in text and "azfw-compliance-" in text
+    assert fields["Область"].startswith("подписки: " + SUB)
+
+
+def test_notification_levels(chat):
+    assert audit.main(example_args("--kind", "compliance", "--format", "json")) == audit.EXIT_OK
+    assert audit.main(example_args("--kind", "compliance", "--format", "json", "--fail-on", "high")) == audit.EXIT_ATTENTION
+    assert chat.posts == []  # by default only errors are sent
+
+    assert audit.main(example_args("--kind", "compliance", "--format", "json", "--fail-on", "high", "--notify", "attention")) == audit.EXIT_ATTENTION
+    title, text, color, _ = message_text(chat.posts[-1])
+    assert title.startswith(":warning:") and color == "#f9a825"
+    assert "Сработали пороги: --fail-on high" in text
+    assert "Изменения с прошлого сбора: 2 (добавлено 0, удалено 0, изменено 2, переименовано 0)" in text
+    assert "• Критический · AZFW-ANY-ANY · `rg-hub-network/fwpol-hub-prod/rcg-workloads/net-allow-workloads/temp-any-any`" in text
+
+    assert audit.main(example_args("--kind", "compliance", "--format", "json", "--notify", "always")) == audit.EXIT_OK
+    assert message_text(chat.posts[-1])[0].startswith(":white_check_mark:")
+
+
+def test_webhook_failure_keeps_exit_code_and_hides_token(chat, tmp_path, caplog):
+    chat.error = requests.ConnectionError(f"Max retries exceeded with url: {WEBHOOK}")
+    path = tmp_path / "x.json"
+    path.write_text("{}", encoding="utf-8")
+    with caplog.at_level("INFO"):
+        assert audit.main(["report", "-c", str(path), "--kind", "drift", "--rocketchat-webhook", WEBHOOK]) == audit.EXIT_ERROR
+    assert len(chat.posts) == 3  # retried
+    assert "secret-token" not in caplog.text and "abc123" not in caplog.text
+    assert "chat.example.com" in caplog.text and "ConnectionError" in caplog.text
+
+
+def test_notifier_retries_only_temporary_failures():
+    chat = FakeChat()
+    chat.responses = [FakeResponse(503), FakeResponse(200)]
+    delays = []
+    notifier = audit.RocketChatNotifier(WEBHOOK, session=chat, sleep=delays.append)
+    assert notifier.send({"text": "x"}) is True and delays == [2]
+    chat.responses = [FakeResponse(400)]
+    assert notifier.send({"text": "x"}) is False and len(chat.posts) == 3
+
+
+def test_notifier_configuration(monkeypatch, caplog):
+    with pytest.raises(audit.ConfigError):
+        audit.RocketChatNotifier("ftp://chat.example.com/hooks/x")
+    with pytest.raises(audit.ConfigError):
+        audit.RocketChatNotifier(WEBHOOK, level="never")
+    audit.RocketChatNotifier("http://chat.example.com/hooks/x/y")
+    assert "открытым текстом" in caplog.text
+
+    monkeypatch.delenv("ROCKETCHAT_WEBHOOK_URL", raising=False)
+    args = audit.build_parser().parse_args(["report", "-c", "x"])
+    assert audit.make_notifier(args) is None
+    monkeypatch.setenv("ROCKETCHAT_WEBHOOK_URL", WEBHOOK)
+    monkeypatch.setenv("ROCKETCHAT_NOTIFY", "always")
+    assert audit.make_notifier(args).level == "always"
+    args = audit.build_parser().parse_args(["report", "-c", "x", "--notify", "attention"])
+    assert audit.make_notifier(args).level == "attention"
+    # The secret never appears in --help, whatever the environment holds.
+    assert "secret-token" not in audit.build_parser().format_help()
+
+
+def test_rocketchat_session_is_not_the_azure_session():
+    assert isinstance(audit.read_only_session().get_adapter("https://management.azure.com"), audit.ReadOnlyAdapter)
+    assert not isinstance(audit.notifier_session().get_adapter("https://chat.example.com"), audit.ReadOnlyAdapter)
+
+
+def test_payload_is_bounded():
+    errors = [{"scope": f"/subscriptions/s/resourcegroups/rg/providers/microsoft.network/ipgroups/g{i}",
+               "stage": "ip group", "status": 403, "message": "denied " * 40, "incomplete": True} for i in range(30)]
+    payload = audit.rocketchat_payload("run", audit.EXIT_INCOMPLETE, {"errors": errors}, host="audit-01")
+    text = payload["attachments"][0]["text"]
+    assert len(text) <= audit.ROCKETCHAT_MAX_TEXT
+    assert "Не прочитано: 30" in text
+
+
+def test_webhook_over_real_http(monkeypatch):
+    received = []
+
+    class Hook(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            received.append((self.path, self.headers.get("Content-Type"), self.headers.get("Authorization"), json.loads(body)))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"success": true}')
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Hook)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+        monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+        notifier = audit.RocketChatNotifier(f"http://127.0.0.1:{server.server_port}/hooks/id/token")
+        payload = audit.rocketchat_payload("run", audit.EXIT_ERROR, {"error": "не удалось получить токен Azure AD"}, host="h")
+        assert notifier.send(payload) is True
+    finally:
+        server.shutdown()
+    path, content_type, authorization, body = received[0]
+    assert path == "/hooks/id/token" and content_type == "application/json" and authorization is None
+    assert body["alias"] == "azfw-audit" and body["attachments"][0]["fields"][2] == {"title": "Узел", "value": "h", "short": True}
